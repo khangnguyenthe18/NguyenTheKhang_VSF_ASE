@@ -31,7 +31,7 @@ Nov 4, 2026 · @Khang
 | Nút feedback OPS (Xác nhận / Sai phân loại / Đã xử lý) | Fine-tune mô hình LLM |
 | Open point + đề xuất hàng tuần (vận hành và về chính AI) | Gửi mail qua Graph API, Teams Workflows thật (không có quyền) |
 | Simulator mock data 3 nước VN, PH, ID có ground truth + bộ đánh giá | Dữ liệu IN, TH, MY (mới công bố kế hoạch) |
-| Adapter dữ liệu masked (từ CP2) + field ablation T0–T3 | Tích hợp với phần Võ Doanh Nhân trước khi chủ dự án yêu cầu |
+| Adapter dữ liệu masked (từ CP2) + field ablation T0–T3 |  |
 
 **Ràng buộc:** Gate 1 và CP1 dùng mock data do simulator sinh (có ground truth); CP2 và CP3 dùng dữ liệu masked (không có ground truth, gán nhãn tay một mẫu 200–300 giao dịch lỗi). Không kết nối production. AI chỉ đọc và gợi ý, OPS quyết định.
 
@@ -96,12 +96,12 @@ flowchart TD
     FB --> OP["Open point generator<br/>(hằng tuần)"]
     SIM -.->|ground_truth.csv| EV
 
-    PARTNER["Phần Võ Doanh Nhân<br/>(DEFERRED: log stream, behavior anomaly)"]
+    PARTNER["Phần Võ Doanh Nhân<br/>log generator · LLM behavior anomaly<br/>log stream + dashboard thống kê"]
     BUS -.->|"ase.anomaly.transaction.v0 (I2)"| PARTNER
     PARTNER -.->|"ase.anomaly.behavior.v0 (I3)"| TR
 ```
 
-Nét liền là luồng chạy ngay ở Gate 1; nét đứt là knowledge, ground truth hoặc tích hợp đối tác (chỉ làm khi chủ dự án yêu cầu).
+Nét liền là luồng chính của ASE; nét đứt là knowledge, ground truth và các điểm tích hợp với phần của Võ Doanh Nhân (mục 6.4).
 
 Rule engine phân loại trước và **luôn gửi alert kể cả khi LLM lỗi hoặc chậm**. LLM chạy bất đồng bộ ở mức incident, chỉ làm giàu (nguyên nhân khả nghi, đề xuất, case `UNKNOWN`) dưới dạng revision của alert, không có tool ghi. Notifier do code gọi dựa trên `TriageResult` đã validate. Mọi thời gian lưu UTC, chỉ đổi sang giờ địa phương của trạm khi hiển thị. Mọi timeout dùng `Clock` được inject (`SimClock` khi replay) để replay tái lập được.
 
@@ -120,17 +120,13 @@ Tổng 100 điểm. Mỗi tiêu chí chấm theo 3 mức, bằng chứng lấy t
 | Cảnh báo (SF5, SF7, SF8) | 15 | p95 < 60s, Mail + Teams đúng mẫu và đúng team, alert/incident ≤ 1.2 | Chỉ một kênh hoặc p95 < 5 phút | Bão alert hoặc sai định dạng |
 | An toàn (SF9) | 10 | Read-only, validate evidence, vượt qua toàn bộ test prompt injection, vẫn cảnh báo khi LLM lỗi | Read-only nhưng thiếu test injection | LLM tự gọi action hoặc bịa evidence |
 | Open point + đề xuất | 10 | Hai nhóm (vận hành, về AI), có evidence và vòng đời, khớp scenario inject | Một nhóm, chưa có vòng đời | Danh sách không có bằng chứng |
-| Cộng hưởng với cặp (điểm cộng) | 10 | Tích hợp chạy end-to-end, metric cộng hưởng đạt (mục 6) | Tích hợp chạy, chưa đo | Chưa tích hợp |
-
-Phần cộng hưởng với cặp là điểm cộng: ASE phải chạy và đạt các tiêu chí còn lại hoàn toàn độc lập, tích hợp chỉ làm khi chủ dự án yêu cầu.
+| Cộng hưởng với cặp | 10 | Tích hợp chạy end-to-end, metric cộng hưởng đạt (mục 6) | Tích hợp chạy, chưa đo | Chưa tích hợp |
 
 ## 6. Pair contract v0
 
 **Cặp:** bài toán ASE (AI kiểm tra giao dịch lỗi, cảnh báo Mail/Teams) × bài toán của Võ Doanh Nhân (cảnh báo dạng log stream/thống kê cho các hành vi LLM phát hiện là bất thường).
 
-**Trạng thái: DEFERRED.** Ưu tiên luôn là dự án ASE. Thiết kế dưới đây là định hướng; chưa viết code tích hợp (Kafka, `ase.anomaly.behavior`) cho tới khi chủ dự án yêu cầu. Tool `get_behavior_anomalies` của Triage Agent trả rỗng khi chưa có dữ liệu đối tác.
-
-### 6.1 Hai bài toán giao nhau ở đâu, giá trị cộng hưởng là gì?
+### 6.1 Hai bài toán giao nhau ở đâu, và giá trị cộng hưởng là gì?
 
 Hai bài toán nhìn cùng một hệ thống đổi pin ở hai mức khác nhau:
 
@@ -150,7 +146,7 @@ Hai bài toán nhìn cùng một hệ thống đổi pin ở hai mức khác nha
 4. **Giám sát chính AI:** thống kê tỷ lệ alert ASE bị OPS đánh dấu "Sai phân loại" theo thời gian → phát hiện AI suy giảm.
 5. **Một ground truth chung:** cùng simulator và scenario, nên đo được giá trị kết hợp một cách khách quan.
 
-### 6.2 Trách nhiệm và ranh giới
+### 6.2 Mỗi người chịu trách nhiệm phần nào, ranh giới ở đâu?
 
 | Hạng mục | ASE (tôi) | Võ Doanh Nhân | Chung |
 | --- | --- | --- | --- |
@@ -164,7 +160,7 @@ Hai bài toán nhìn cùng một hệ thống đổi pin ở hai mức khác nha
 
 **Ranh giới:** ASE sở hữu mức *giao dịch* và *kênh push tới con người*; Võ Doanh Nhân sở hữu mức *hành vi trên log* và *giao diện quan sát/thống kê*. Chỉ có một kênh Mail/Teams để tránh OPS nhận hai cảnh báo cho cùng một sự cố. Mỗi bên phải chạy được độc lập khi bên kia ngừng.
 
-### 6.3 Trao đổi gì, định dạng nào
+### 6.3 Hai bên trao đổi gì với nhau, theo định dạng nào?
 
 Giai đoạn đầu mỗi topic là một file `data/<profile>/<topic>.jsonl` dùng chung (I1); từ I2 là topic Kafka/Redpanda cùng tên, sau cùng interface `EventSource`/`EventSink` nên detector không phải sửa. Message JSON theo JSON Schema có phiên bản. Thời gian là ISO-8601 UTC, độ chính xác mili giây.
 
@@ -178,7 +174,7 @@ Giai đoạn đầu mỗi topic là một file `data/<profile>/<topic>.jsonl` d�
 
 Quy tắc: thêm field mới không phá vỡ (consumer bỏ qua field lạ); đổi hoặc xoá field phải tăng major version và cả hai đồng ý. Mỗi schema có bộ fixture mẫu và contract test chạy trong CI của cả hai bên.
 
-### 6.4 Tích hợp ở phần nào, đo cộng hưởng bằng gì
+### 6.4 Khi nào tích hợp, và đo giá trị cộng hưởng bằng gì?
 
 Hai hệ tích hợp tại 5 điểm theo thứ tự phụ thuộc: điểm sau chỉ làm khi điểm trước đã chạy.
 
@@ -223,7 +219,7 @@ Ngưỡng của `eval` (simulator tự kiểm tra, báo lỗi nếu không đạ
 | Pin / app | 6 lô pin; 4 phiên bản app |
 | Gói thuê | `RENT_1`, `RENT_2` (cả 3 nước), `FLEET` (vận doanh Green SM, chỉ VN) |
 | Telemetry | Heartbeat 1 phút/lần + event quanh phiên (mở/đóng cửa, đọc BMS) |
-| Dấu hiệu trước khi fail | Thể hiện qua `latency_ms` trên event; **không sinh `app_logs`** (phần đối tác, DEFERRED) |
+| Dấu hiệu trước khi fail | Thể hiện qua `latency_ms` trên event; log app/service/tủ (`ase.logs.raw`) do log generator của Võ Doanh Nhân sinh theo cùng scenario + seed |
 
 **Phạm vi quốc gia** (chỉ các nước đã triển khai; cấu hình trong `knowledge/countries.yaml`, thêm nước không sửa code)
 
@@ -255,6 +251,7 @@ Ngưỡng của `eval` (simulator tự kiểm tra, báo lỗi nếu không đạ
 | `swap_events` | `event_id`, `session_id`, `step` (1–7), `status` (OK/FAILED/TIMEOUT/PENDING), `error_code`, `error_message` (untrusted), `latency_ms`, `occurred_at` (UTC) |
 | `payments` | `payment_id`, `session_id`, `amount`, `currency`, `status`, `captured`, `callback_at` |
 | `cabinet_telemetry` | `cabinet_id`, `slot_id`, `door_state`, `battery_detected`, `soc`, `temperature`, `heartbeat_at`, `hw_error_code` |
+| `app_logs` (log generator của Võ Doanh Nhân) | `ts`, `service`, `level`, `trace_id`, `session_id`, `latency_ms`, `message` |
 | `ground_truth` | `session_id`, `is_failure`, `category`, `scenario`, `scenario_start`, `injected_at` |
 | `error_catalog`, `runbooks` (`knowledge/`) | `error_code → step, category, severity, runbook_id`; nội dung SOP |
 
@@ -290,7 +287,7 @@ Ngưỡng của `eval` (simulator tự kiểm tra, báo lỗi nếu không đạ
 | Bão alert, alert trùng giữa hai hệ | OPS bỏ qua cảnh báo | Correlator gộp incident; một kênh Mail/Teams duy nhất; idempotency key |
 | Báo nhầm do callback thanh toán trễ | Precision giảm | Grace window theo provider trước khi kết luận lỗi |
 | Schema thay đổi lệch giữa hai bên | Tích hợp vỡ | Schema có phiên bản, contract test trong CI, đổi phải cả hai đồng ý |
-| Tiến độ một bên trễ | Mốc tích hợp trượt | Phần đối tác DEFERRED; ASE chạy hoàn toàn độc lập, tích hợp lần lượt từng điểm khi được yêu cầu |
+| Tiến độ một bên trễ | Mốc tích hợp trượt | Mỗi bên chạy độc lập bằng fixture; tích hợp lần lượt từng điểm, I2 chỉ cần một chiều |
 
 **Phụ thuộc**
 
@@ -302,5 +299,5 @@ Ngưỡng của `eval` (simulator tự kiểm tra, báo lỗi nếu không đạ
 | Người gán nhãn mẫu dữ liệu masked | Đánh giá | Đã có người gán nhãn 200–300 giao dịch lỗi |
 | Mail / Teams | Tích hợp | Không có quyền Graph API và Teams Workflows → MailHog (Docker) + mock Teams (FastAPI) |
 | Hạ tầng | Hạ tầng | Laptop 16GB, không GPU NVIDIA; JSONL + SQLite, chỉ MailHog chạy Docker; một lệnh `make e2e PROFILE=smoke` |
-| Log generator + schema `ase.anomaly.behavior` của Võ Doanh Nhân | Giữa cặp | DEFERRED; khi tích hợp dùng fixture tĩnh nếu bên kia chưa sẵn sàng |
+| Log generator + schema `ase.anomaly.behavior` của Võ Doanh Nhân | Giữa cặp | Cần trước khi tích hợp I1–I2; dự phòng dùng fixture tĩnh |
 | Mô tả nghiệp vụ đổi pin (7 bước, SLA, mã lỗi, SOP, bảng giá) | Nghiệp vụ | Tự xây dựng theo hành trình khách hàng + bảng giá VinFast VN/PH/ID; cần mentor xác nhận |
