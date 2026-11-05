@@ -25,14 +25,15 @@ Nov 4, 2026 · @Khang
 | Phát hiện giao dịch lỗi và bất thường realtime trên 7 bước | Tự động khắc phục, hoàn tiền, khoá tủ (AI không có quyền ghi) |
 | Phát hiện lỗi im lặng: kẹt bước quá SLA, đã trừ tiền nhưng fail | Kết nối vào hệ thống production thật |
 | Phân loại 7 nhóm lỗi + mức độ P1/P2/P3 | Dự báo hỏng hóc thiết bị, dự báo nhu cầu pin |
-| LLM gợi ý nguyên nhân và hướng xử lý (RAG runbook) | Phân tích tài chính, đối soát doanh thu |
-| Gộp giao dịch thành incident, chống bão alert | Dashboard thống kê / log stream hành vi bất thường (thuộc phần của Võ Doanh Nhân) |
-| Gửi Mail + Teams theo mẫu `[ASE]`, định tuyến theo team | App mobile, giao diện cho khách hàng |
+| LLM (Claude Haiku 5.5, single-shot) gợi ý nguyên nhân và hướng xử lý; runbook chọn theo ánh xạ cố định `error_code → runbook_id` | Phân tích tài chính, đối soát doanh thu |
+| Gộp giao dịch thành incident (kể cả incident đa quốc gia), chống bão alert | Dashboard thống kê / log stream hành vi bất thường (thuộc phần của Võ Doanh Nhân) |
+| Gửi Mail (MailHog) + Teams (mock Teams) theo mẫu `[ASE]`, định tuyến theo category; giờ địa phương theo timezone trạm | App mobile, giao diện cho khách hàng |
 | Nút feedback OPS (Xác nhận / Sai phân loại / Đã xử lý) | Fine-tune mô hình LLM |
-| Open point + đề xuất hàng tuần (vận hành và về chính AI) |  |
-| Simulator mock data có ground truth + bộ đánh giá |  |
+| Open point + đề xuất hàng tuần (vận hành và về chính AI) | Gửi mail qua Graph API, Teams Workflows thật (không có quyền) |
+| Simulator mock data 3 nước VN, PH, ID có ground truth + bộ đánh giá | Dữ liệu IN, TH, MY (mới công bố kế hoạch) |
+| Adapter dữ liệu masked (từ CP2) + field ablation T0–T3 | Tích hợp với phần Võ Doanh Nhân trước khi chủ dự án yêu cầu |
 
-**Ràng buộc:** chỉ dùng mock data; AI chỉ đọc và gợi ý, OPS quyết định.
+**Ràng buộc:** Gate 1 và CP1 dùng mock data do simulator sinh (có ground truth); CP2 và CP3 dùng dữ liệu masked (không có ground truth, gán nhãn tay một mẫu 200–300 giao dịch lỗi). Không kết nối production. AI chỉ đọc và gợi ý, OPS quyết định.
 
 ## 3. Success metric
 
@@ -54,11 +55,57 @@ Mỗi chỉ tiêu được đo trên hai cấu hình **rule-only** và **rule + 
 
 ## 4. Kiến trúc sơ bộ
 
-&#91;embedded content: Kiến trúc AFS và điểm tích hợp với phần của Võ Doanh Nhân\]
+```mermaid
+flowchart TD
+    SIM["Simulator (mock, ASE)<br/>hoặc adapter dữ liệu masked"]
+    BUS[["Transport: JSONL data/{profile}/{topic}.jsonl<br/>(Kafka/Redpanda từ I2)"]]
+    SIM -->|ase.swap.events| BUS
 
-Rule engine luôn cảnh báo được kể cả khi LLM lỗi; LLM chỉ làm giàu bằng chứng và nguyên nhân, không có tool ghi. Mọi trao đổi với phần của Võ Doanh Nhân đi qua event bus.
+    subgraph DET["Detector — rule, deterministic"]
+        direction TB
+        SM["State machine tracker<br/>(SLA timeout, lỗi im lặng)"]
+        CL["Rule classifier<br/>(error catalog)"]
+        AN["Anomaly EWMA<br/>theo tủ/trạm"]
+        CO["Correlator<br/>giao dịch → incident"]
+        SM --> CO
+        CL --> CO
+        AN --> CO
+    end
+    BUS --> DET
 
-**Stack:** Python 3.12, FastAPI, aiokafka, Pydantic v2, PostgreSQL + pgvector, Redpanda, Docker Compose; Mail qua Graph API hoặc MailHog, Teams qua Workflows webhook.
+    KN[("Knowledge YAML<br/>state machine · error catalog<br/>routing · countries · runbooks")]
+    KN -.-> DET
+
+    NO["Notifier<br/>routing theo category · outbox · idempotency"]
+    CO -->|"alert đầu tiên (không chờ LLM)"| NO
+
+    TR["Triage Agent — Claude Haiku 5.5<br/>single-shot, không tool ghi<br/>→ TriageResult (Pydantic)"]
+    CO -->|"incident (bất đồng bộ, bỏ qua USER)"| TR
+    KN -.-> TR
+    TR -->|"revision: nguyên nhân, đề xuất, runbook"| NO
+
+    NO --> MAIL["Mail → MailHog"]
+    NO --> TEAMS["mock Teams<br/>(Adaptive Card)"]
+
+    OPS(["OPS: Xác nhận · Sai phân loại · Đã xử lý"])
+    MAIL --> OPS
+    TEAMS --> OPS
+    OPS --> FB[("Feedback store (SQLite)")]
+
+    FB --> EV["Evaluator<br/>SF1–SF9: rule-only vs rule + LLM"]
+    FB --> OP["Open point generator<br/>(hằng tuần)"]
+    SIM -.->|ground_truth.csv| EV
+
+    PARTNER["Phần Võ Doanh Nhân<br/>(DEFERRED: log stream, behavior anomaly)"]
+    BUS -.->|"ase.anomaly.transaction.v0 (I2)"| PARTNER
+    PARTNER -.->|"ase.anomaly.behavior.v0 (I3)"| TR
+```
+
+Nét liền là luồng chạy ngay ở Gate 1; nét đứt là knowledge, ground truth hoặc tích hợp đối tác (chỉ làm khi chủ dự án yêu cầu).
+
+Rule engine phân loại trước và **luôn gửi alert kể cả khi LLM lỗi hoặc chậm**. LLM chạy bất đồng bộ ở mức incident, chỉ làm giàu (nguyên nhân khả nghi, đề xuất, case `UNKNOWN`) dưới dạng revision của alert, không có tool ghi. Notifier do code gọi dựa trên `TriageResult` đã validate. Mọi thời gian lưu UTC, chỉ đổi sang giờ địa phương của trạm khi hiển thị. Mọi timeout dùng `Clock` được inject (`SimClock` khi replay) để replay tái lập được.
+
+**Stack:** Python 3.12 + `uv`, asyncio, Pydantic v2, polars + pyarrow, orjson, SQLite (`aiosqlite`: incident, outbox, feedback, cache LLM), FastAPI (feedback API + mock Teams), aiosmtplib → MailHog (container Docker duy nhất), Jinja2, scikit-learn (đánh giá), structlog; LLM qua SDK `anthropic` (Claude Haiku 5.5, prompt caching, Batch API cho eval), dự phòng `ollama` local. Không dùng LangChain, vector DB, Postgres/Redis/Kafka giai đoạn đầu.
 
 ## 5. Rubric cụ thể hoá
 
@@ -73,11 +120,15 @@ Tổng 100 điểm. Mỗi tiêu chí chấm theo 3 mức, bằng chứng lấy t
 | Cảnh báo (SF5, SF7, SF8) | 15 | p95 < 60s, Mail + Teams đúng mẫu và đúng team, alert/incident ≤ 1.2 | Chỉ một kênh hoặc p95 < 5 phút | Bão alert hoặc sai định dạng |
 | An toàn (SF9) | 10 | Read-only, validate evidence, vượt qua toàn bộ test prompt injection, vẫn cảnh báo khi LLM lỗi | Read-only nhưng thiếu test injection | LLM tự gọi action hoặc bịa evidence |
 | Open point + đề xuất | 10 | Hai nhóm (vận hành, về AI), có evidence và vòng đời, khớp scenario inject | Một nhóm, chưa có vòng đời | Danh sách không có bằng chứng |
-| Cộng hưởng với cặp | 10 | Tích hợp chạy end-to-end, metric cộng hưởng đạt (mục 6) | Tích hợp chạy, chưa đo | Chưa tích hợp |
+| Cộng hưởng với cặp (điểm cộng) | 10 | Tích hợp chạy end-to-end, metric cộng hưởng đạt (mục 6) | Tích hợp chạy, chưa đo | Chưa tích hợp |
+
+Phần cộng hưởng với cặp là điểm cộng: ASE phải chạy và đạt các tiêu chí còn lại hoàn toàn độc lập, tích hợp chỉ làm khi chủ dự án yêu cầu.
 
 ## 6. Pair contract v0
 
 **Cặp:** bài toán ASE (AI kiểm tra giao dịch lỗi, cảnh báo Mail/Teams) × bài toán của Võ Doanh Nhân (cảnh báo dạng log stream/thống kê cho các hành vi LLM phát hiện là bất thường).
+
+**Trạng thái: DEFERRED.** Ưu tiên luôn là dự án ASE. Thiết kế dưới đây là định hướng; chưa viết code tích hợp (Kafka, `ase.anomaly.behavior`) cho tới khi chủ dự án yêu cầu. Tool `get_behavior_anomalies` của Triage Agent trả rỗng khi chưa có dữ liệu đối tác.
 
 ### 6.1 Hai bài toán giao nhau ở đâu, giá trị cộng hưởng là gì?
 
@@ -115,7 +166,7 @@ Hai bài toán nhìn cùng một hệ thống đổi pin ở hai mức khác nha
 
 ### 6.3 Trao đổi gì, định dạng nào
 
-Trao đổi qua Kafka/Redpanda, message JSON theo JSON Schema có phiên bản. Thời gian là ISO-8601 UTC, độ chính xác mili giây.
+Giai đoạn đầu mỗi topic là một file `data/<profile>/<topic>.jsonl` dùng chung (I1); từ I2 là topic Kafka/Redpanda cùng tên, sau cùng interface `EventSource`/`EventSink` nên detector không phải sửa. Message JSON theo JSON Schema có phiên bản. Thời gian là ISO-8601 UTC, độ chính xác mili giây.
 
 | Topic | Chiều | Nội dung |
 | --- | --- | --- |
@@ -151,48 +202,75 @@ Hai hệ tích hợp tại 5 điểm theo thứ tự phụ thuộc: điểm sau 
 
 ## 7. Đặc tả bộ dữ liệu mockup
 
-Simulator sinh dữ liệu tái lập được (cố định seed), vừa ghi file vừa replay dưới dạng stream. Mọi lỗi được inject đều có nhãn ground truth.
+Simulator sinh dữ liệu tái lập được (cố định seed; tập test dùng seed khác tập dev), ghi JSONL (replay stream, mỗi topic một file), Parquet (phân tích) và CSV (ground truth). Mọi phiên, kể cả không lỗi, đều có dòng ground truth. Thứ tự dòng JSONL là thứ tự event đến hệ thống: simulator cố ý xáo trộn và nhân bản một phần event.
 
-**Quy mô mặc định**
+**Profile quy mô** (chọn bằng `--profile`; chất lượng đánh giá phụ thuộc số case lỗi, không phải tổng số giao dịch)
+
+| Profile | Dùng cho | Trạm (× 2–4 tủ × 12 khoang) | Ngày | Phiên/ngày | Tổng phiên |
+| --- | --- | --- | --- | --- | --- |
+| `smoke` | CI, unit/e2e test | 2 (VN) | 1 | \~300 | \~300 |
+| `dev` | Viết và chỉnh rule hằng ngày | 5 (VN 2, PH 1, ID 2 [WIB + WITA]) | 14 | \~1.000 | \~14 nghìn |
+| `eval` | Đo SF1–SF9 và ablation | 11 (VN 7, PH 2, ID 2 [WIB + WITA]) | 30 (20 baseline + 10 test) | \~1.500 | \~45 nghìn |
+
+Ngưỡng của `eval` (simulator tự kiểm tra, báo lỗi nếu không đạt): mỗi category thật ≥ 50 case lỗi trong tập test, mỗi scenario ≥ 2 lần trong tập test, mỗi tủ ≥ 7 ngày lịch sử trước tập test (baseline EWMA).
+
+**Tham số chung**
 
 | Tham số | Giá trị |
 | --- | --- |
-| Khoảng thời gian | 60 ngày (45 ngày dev, 15 ngày test, seed khác nhau) |
-| Trạm / tủ / khoang | 20 trạm × 2–4 tủ × 12 khoang |
-| Pin | \~2.000 pin, thuộc 6 lô sản xuất |
-| Người dùng | \~5.000 user, 3 loại gói thuê |
-| Lưu lượng | \~8.000 phiên/ngày, cao điểm 7–9h và 17–19h |
-| Tỷ lệ lỗi nền | \~3–5%, chủ yếu nhóm USER |
-| Payment provider / app version | 3 provider; 4 phiên bản app |
-| Định dạng | Parquet (phân tích), JSONL (replay stream), CSV (ground truth) |
+| Lưu lượng | Cao điểm 7–9h và 17–19h theo **giờ địa phương** của trạm |
+| Tỷ lệ lỗi nền | \~3–5%, chủ yếu nhóm USER; \~10% phiên lỗi cố ý thiếu `error_code` (bài toán cho correlator + LLM) |
+| Pin / app | 6 lô pin; 4 phiên bản app |
+| Gói thuê | `RENT_1`, `RENT_2` (cả 3 nước), `FLEET` (vận doanh Green SM, chỉ VN) |
+| Telemetry | Heartbeat 1 phút/lần + event quanh phiên (mở/đóng cửa, đọc BMS) |
+| Dấu hiệu trước khi fail | Thể hiện qua `latency_ms` trên event; **không sinh `app_logs`** (phần đối tác, DEFERRED) |
+
+**Phạm vi quốc gia** (chỉ các nước đã triển khai; cấu hình trong `knowledge/countries.yaml`, thêm nước không sửa code)
+
+| Nước | Timezone (IANA) | Tiền tệ | Phí đổi /pin/lần | Thuê pin /tháng | Payment provider | Tỷ trọng |
+| --- | --- | --- | --- | --- | --- | --- |
+| VN | `Asia/Ho_Chi_Minh` (+7) | VND | 9.000 | 175.000 (1 pin), 300.000 (2 pin) | `VN_WALLET_1`, `VN_WALLET_2`, `VN_CARD` | \~70% |
+| PH | `Asia/Manila` (+8) | PHP | 35 | 439 /pin | `PH_WALLET_1`, `PH_CARD` | \~17% |
+| ID | `Asia/Jakarta` (+7) + `Asia/Makassar` (+8) | IDR | 6.000 | 84.000 /pin | `ID_WALLET_1`, `ID_CARD` | \~13% |
+
+Ưu đãi miễn phí (VN đến 30/06/2028, PH năm đầu ≤ 20 lần/tháng, Green SM 3 năm) được lưu trong YAML, nhưng simulator mặc định `pricing_mode: standard_fee` (mọi lần đổi tính `swap_fee × số pin`) để bước thanh toán luôn có giao dịch tiền. OPS là một đội trung tâm nhận alert tiếng Việt cho cả 3 nước; routing theo category, alert có dòng "Quốc gia".
+
+**Tầng trường dữ liệu** (dùng cho field ablation và adapter dữ liệu masked; rule thiếu trường thì tự tắt và ghi vào báo cáo coverage)
+
+| Tầng | Trường |
+| --- | --- |
+| T0 – tối thiểu | `session_id`, `occurred_at`, `step`, `status`, `station_id` (+ `country`/`timezone` suy từ bảng trạm) |
+| T1 – quan trọng | `error_code`, `cabinet_id`, `slot_id`, `payment.captured`, `payment_provider` |
+| T2 – bổ sung | `app_version`, `battery_id`, `lot_id`, `soc`, `soh`, `user_id` (hash), `latency_ms` |
+| T3 – telemetry | `door_state`, `battery_detected`, `heartbeat_at`, `temperature`, `hw_error_code` |
 
 **Bảng và trường chính**
 
 | Bảng | Trường chính |
 | --- | --- |
-| `stations`, `cabinets`, `slots` | `station_id`, `cabinet_id`, `slot_id`, `model_gen`, `install_date` |
+| `stations`, `cabinets`, `slots` | `station_id`, `country`, `timezone` (IANA), `cabinet_id`, `slot_id`, `model_gen`, `install_date` |
 | `batteries` | `battery_id`, `lot_id`, `soh`, `cycle_count` |
 | `users` | `user_id` (hash), `package_type`, `package_expiry`, `debt_flag` |
 | `swap_sessions` | `session_id`, `user_id`, `station_id`, `cabinet_id`, `slot_in`, `slot_out`, `app_version`, `payment_provider`, `final_status`, `started_at`, `ended_at` |
-| `swap_events` | `event_id`, `session_id`, `step` (1–7), `status` (OK/FAILED/TIMEOUT/PENDING), `error_code`, `error_message`, `occurred_at` (UTC) |
-| `payments` | `payment_id`, `session_id`, `amount`, `status`, `captured`, `callback_at` |
-| `cabinet_telemetry` | `cabinet_id`, `slot_id`, `door_state`, `battery_detected`, `soc`, `heartbeat_at`, `hw_error_code` |
-| `app_logs` (cho Võ Doanh Nhân) | `ts`, `service`, `level`, `trace_id`, `session_id`, `latency_ms`, `message` |
+| `swap_events` | `event_id`, `session_id`, `step` (1–7), `status` (OK/FAILED/TIMEOUT/PENDING), `error_code`, `error_message` (untrusted), `latency_ms`, `occurred_at` (UTC) |
+| `payments` | `payment_id`, `session_id`, `amount`, `currency`, `status`, `captured`, `callback_at` |
+| `cabinet_telemetry` | `cabinet_id`, `slot_id`, `door_state`, `battery_detected`, `soc`, `temperature`, `heartbeat_at`, `hw_error_code` |
 | `ground_truth` | `session_id`, `is_failure`, `category`, `scenario`, `scenario_start`, `injected_at` |
-| `error_catalog`, `runbooks` | `error_code → step, category, severity, owner, runbook_id`; nội dung SOP |
+| `error_catalog`, `runbooks` (`knowledge/`) | `error_code → step, category, severity, runbook_id`; nội dung SOP |
 
 **Kịch bản inject (mỗi scenario xuất hiện ít nhất 2 lần trong tập test)**
 
-| Scenario | Nhóm | Bước | Dấu hiệu trên log trước khi fail | Kiểm chứng |
+| Scenario | Nhóm | Bước | Dấu hiệu trước khi fail (qua `latency_ms` / telemetry) | Kiểm chứng |
 | --- | --- | --- | --- | --- |
-| Deploy lỗi, session-service trả 503 trong 40 phút | SYSTEM | 3 | Latency tăng dần | SF2, SF5, SF8, cộng hưởng |
+| Deploy lỗi, session-service trả 503 trong 40 phút (**cả 3 nước**) | SYSTEM | 3 | Latency tăng dần | SF2, SF5, SF8 (phải ra **1 incident**, không 3) |
 | App v3.2.1 lỗi quét QR | SYSTEM | 3 | Exception tăng theo app version | SF4, SF6 |
 | Khoang 07 tủ CAB-03 kẹt cửa nhiều ngày | HARDWARE | 6 | Heartbeat chập chờn | SF4, open point |
-| Ví điện tử ngừng 20 phút | PAYMENT | 5 | Timeout callback | SF2, SF8 |
+| Ví `PH_WALLET_1` ngừng 20 phút (chỉ PH) | PAYMENT | 5 | Timeout callback | SF2, SF4 (khoanh vùng 1 nước), SF8 |
+| Hiển thị giờ trạm PH (+8) và ID WITA (+8) | — | bất kỳ | — | SF7 (giờ địa phương đúng) |
 | Đã trừ tiền nhưng không nhả pin | PAYMENT (P1) | 5–7 | Không có | SF2 (lỗi im lặng) |
 | Lô pin SOH thấp | BATTERY\_QUALITY | 7 | SOC xuất ra thấp | SF4, SF6 |
 | Thiếu pin đầy giờ cao điểm | BUSINESS | 4 | Số pin sẵn sàng giảm | SF4 |
-| Thanh toán PENDING rồi thành công (không phải lỗi) | — | 5 | — | SF3 (bẫy) |
+| Thanh toán PENDING rồi thành công (**không phải lỗi**) | — | 5 | — | SF3 (bẫy) |
 | `error_message` chứa câu lệnh prompt injection | — | bất kỳ | — | SF9 |
 | Event trùng, sai thứ tự, đến trễ | — | bất kỳ | — | SF1, SF3 |
 
@@ -204,21 +282,25 @@ Simulator sinh dữ liệu tái lập được (cố định seed), vừa ghi fi
 | --- | --- | --- |
 | Mock data quá sạch, kết quả đẹp giả tạo | Đánh giá sai năng lực thật | Thêm nhiễu, lỗi nền, edge case; tách seed dev/test; nêu rõ giới hạn trong báo cáo |
 | Thiết kế scenario thiên về cách AI sẽ giải | Overfit vào chính simulator | Khoá tập scenario test trước khi viết rule; thêm scenario do Võ Doanh Nhân thiết kế |
+| **Dữ liệu masked thiếu trường mà rule cần (giả định rủi ro nhất)** | SF4 < 85% ở CP2–CP3 | Field ablation T0→T3 trên mock `dev` ở Gate 1 → bảng "tập trường → SF4" làm danh sách yêu cầu dữ liệu gửi mentor; adapter masked cấu hình bằng YAML |
 | LLM hallucinate nguyên nhân hoặc evidence | OPS tin sai gợi ý | Evidence phải trỏ tới ID có thật, post-validate bằng code; ghi rõ "AI gợi ý" |
 | Prompt injection qua `error_message` / log | LLM bị điều khiển | Dữ liệu bọc trong delimiter untrusted; LLM không có tool ghi; alert do code gửi |
-| LLM chậm, lỗi hoặc hết quota | Mất cảnh báo | Alert vẫn gửi bằng kết quả rule; timeout 20s, tối đa 5 tool call |
+| LLM chậm, lỗi hoặc hết quota | Mất cảnh báo | Alert đầu tiên luôn gửi bằng kết quả rule, LLM bổ sung sau dưới dạng revision; single-shot, timeout 20s; parse lỗi → retry 1 lần → fallback rule |
+| Chi phí LLM vượt ngân sách | Dừng thí nghiệm | Ngân sách ≤ $30 toàn dự án; cost guard cứng trong `LLMClient` (≤ $2/lần chạy), prompt caching, Batch API cho eval, cache kết quả theo nội dung |
 | Bão alert, alert trùng giữa hai hệ | OPS bỏ qua cảnh báo | Correlator gộp incident; một kênh Mail/Teams duy nhất; idempotency key |
 | Báo nhầm do callback thanh toán trễ | Precision giảm | Grace window theo provider trước khi kết luận lỗi |
 | Schema thay đổi lệch giữa hai bên | Tích hợp vỡ | Schema có phiên bản, contract test trong CI, đổi phải cả hai đồng ý |
-| Tiến độ một bên trễ | Mốc tích hợp trượt | Mỗi bên chạy độc lập bằng fixture; tích hợp lần lượt từng điểm, I2 chỉ cần một chiều |
+| Tiến độ một bên trễ | Mốc tích hợp trượt | Phần đối tác DEFERRED; ASE chạy hoàn toàn độc lập, tích hợp lần lượt từng điểm khi được yêu cầu |
 
 **Phụ thuộc**
 
 | Phụ thuộc | Loại | Trạng thái / phương án dự phòng |
 | --- | --- | --- |
-| API LLM (có structured output) | Kỹ thuật | Cần xác nhận quota; dự phòng chạy rule-only |
-| Kafka/Redpanda, PostgreSQL, Docker | Hạ tầng | Chạy local bằng Docker Compose |
-| Gửi mail (Graph API hoặc SMTP) | Tích hợp | Dự phòng MailHog để demo |
-| Teams Workflows webhook | Tích hợp | Cần quyền tạo webhook trong một channel; dự phòng mock endpoint |
-| Log generator + schema `ase.anomaly.behavior` của Võ Doanh Nhân | Giữa cặp | Cần trước khi tích hợp I1–I2; dự phòng dùng fixture tĩnh |
-| Mô tả nghiệp vụ đổi pin (7 bước, SLA, mã lỗi, SOP) | Nghiệp vụ | Tự xây dựng dựa trên hành trình khách hàng; cần mentor xác nhận |
+| API LLM: Claude Haiku 5.5 (SDK `anthropic`) | Kỹ thuật | Key riêng `ase-dev`, spend limit $30 trên Console; dự phòng `ollama` local (≤ 7–8B Q4, chạy CPU) hoặc rule-only |
+| Gửi dữ liệu masked lên API ngoài | Quy định | Đã cho phép (cờ `ASE_ALLOW_EXTERNAL_LLM_ON_MASKED=true`); nếu bị cấm → chuyển `ollama` chỉ bằng cấu hình |
+| Dữ liệu masked + schema | Dữ liệu | Chưa có schema, chưa rõ ngày nhận; viết sẵn khung adapter trước CP2 |
+| Người gán nhãn mẫu dữ liệu masked | Đánh giá | Đã có người gán nhãn 200–300 giao dịch lỗi |
+| Mail / Teams | Tích hợp | Không có quyền Graph API và Teams Workflows → MailHog (Docker) + mock Teams (FastAPI) |
+| Hạ tầng | Hạ tầng | Laptop 16GB, không GPU NVIDIA; JSONL + SQLite, chỉ MailHog chạy Docker; một lệnh `make e2e PROFILE=smoke` |
+| Log generator + schema `ase.anomaly.behavior` của Võ Doanh Nhân | Giữa cặp | DEFERRED; khi tích hợp dùng fixture tĩnh nếu bên kia chưa sẵn sàng |
+| Mô tả nghiệp vụ đổi pin (7 bước, SLA, mã lỗi, SOP, bảng giá) | Nghiệp vụ | Tự xây dựng theo hành trình khách hàng + bảng giá VinFast VN/PH/ID; cần mentor xác nhận |
