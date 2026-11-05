@@ -1,9 +1,7 @@
 # Định nghĩa các kịch bản lỗi inject (MOCK_PLAN §8, §3a, §12).
-# Mỗi kịch bản chỉ định cửa sổ thời gian (day_offset + start_hour_local + duration_minutes)
-# hoặc điều kiện kích hoạt, tách biệt hoàn toàn giữa baseline/dev và test (đóng băng tập test).
-#
-# Lưu ý bước 12: Các kịch bản có `split_target: test` dùng cho tập test của `eval` (days 20..29)
-# và được đóng băng trước khi viết rule cho detector.
+# Mỗi kịch bản chỉ định cửa sổ thời gian theo từng profile (`smoke`, `dev`, `eval`).
+# Lưu ý bước 12: Trong profile `eval`, các cửa sổ có `day >= 20` thuộc `split: test`
+# (xác định bởi `profiles.yaml`) và được đóng băng trước khi viết rule cho detector.
 
 lot_low_soh_id: "LOT-F"
 lot_low_soh_range: [58.0, 68.0]
@@ -246,3 +244,4 @@ scenarios:
         - {instance_idx: 1, day: 13, utc_hour: 7, minute: 0, duration_minutes: 60}
         - {instance_idx: 2, day: 23, utc_hour: 7, minute: 0, duration_minutes: 60}
         - {instance_idx: 3, day: 29, utc_hour: 7, minute: 0, duration_minutes: 60}
+
