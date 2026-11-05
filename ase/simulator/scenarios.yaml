@@ -1,0 +1,248 @@
+# Định nghĩa các kịch bản lỗi inject (MOCK_PLAN §8, §3a, §12).
+# Mỗi kịch bản chỉ định cửa sổ thời gian (day_offset + start_hour_local + duration_minutes)
+# hoặc điều kiện kích hoạt, tách biệt hoàn toàn giữa baseline/dev và test (đóng băng tập test).
+#
+# Lưu ý bước 12: Các kịch bản có `split_target: test` dùng cho tập test của `eval` (days 20..29)
+# và được đóng băng trước khi viết rule cho detector.
+
+lot_low_soh_id: "LOT-F"
+lot_low_soh_range: [58.0, 68.0]
+
+scenarios:
+  # 1. Deploy lỗi session-service 503 trong 40', phủ cả 3 nước (VN+PH+ID) -> 1 scenario_instance_id
+  - name: deploy_503
+    category: SYSTEM
+    error_code: SESS_CREATE_5XX
+    step: 3_scan_qr
+    kind: global_window
+    fail_prob: 0.85
+    pre_window_minutes: 15       # latency_ms tăng dần 15' trước khi fail
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 3, minute: 0, duration_minutes: 40}
+      dev:
+        - {instance_idx: 1, day: 2, utc_hour: 3, minute: 0, duration_minutes: 40}
+        - {instance_idx: 2, day: 9, utc_hour: 10, minute: 0, duration_minutes: 40}
+        - {instance_idx: 3, day: 12, utc_hour: 2, minute: 30, duration_minutes: 40}
+      eval:
+        - {instance_idx: 1, day: 5, utc_hour: 3, minute: 0, duration_minutes: 40}
+        - {instance_idx: 2, day: 14, utc_hour: 10, minute: 0, duration_minutes: 40}
+        - {instance_idx: 3, day: 21, utc_hour: 2, minute: 0, duration_minutes: 45}
+        - {instance_idx: 4, day: 26, utc_hour: 10, minute: 0, duration_minutes: 45}
+
+  # 2. App v3.2.1 lỗi quét QR ở bước 3
+  - name: app_v321_qr_bug
+    category: SYSTEM
+    error_code: SESS_CREATE_5XX
+    step: 3_scan_qr
+    kind: app_version
+    app_version: "3.2.1"
+    fail_prob: 0.55
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 6, minute: 0, duration_minutes: 180}
+      dev:
+        - {instance_idx: 1, day: 3, utc_hour: 1, minute: 0, duration_minutes: 360}
+        - {instance_idx: 2, day: 8, utc_hour: 1, minute: 0, duration_minutes: 360}
+        - {instance_idx: 3, day: 11, utc_hour: 9, minute: 0, duration_minutes: 360}
+      eval:
+        - {instance_idx: 1, day: 6, utc_hour: 1, minute: 0, duration_minutes: 360}
+        - {instance_idx: 2, day: 22, utc_hour: 1, minute: 0, duration_minutes: 420}
+        - {instance_idx: 3, day: 27, utc_hour: 9, minute: 0, duration_minutes: 420}
+
+  # 3. Khoang 07 tủ CAB-03 kẹt cửa nhiều ngày, door_state không đổi, heartbeat chập chờn
+  - name: slot_door_jam
+    category: HARDWARE
+    error_code: SLOT_DOOR_JAM
+    step: 6_return_battery
+    kind: cabinet_slot
+    cabinet_suffix: "CAB-03"
+    slot_id: "07"
+    fail_prob: 0.90
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 0, minute: 0, duration_minutes: 720}
+      dev:
+        - {instance_idx: 1, day: 1, utc_hour: 0, minute: 0, duration_minutes: 2880}
+        - {instance_idx: 2, day: 8, utc_hour: 0, minute: 0, duration_minutes: 2880}
+        - {instance_idx: 3, day: 11, utc_hour: 0, minute: 0, duration_minutes: 2880}
+      eval:
+        - {instance_idx: 1, day: 4, utc_hour: 0, minute: 0, duration_minutes: 4320}
+        - {instance_idx: 2, day: 20, utc_hour: 0, minute: 0, duration_minutes: 4320}
+        - {instance_idx: 3, day: 25, utc_hour: 0, minute: 0, duration_minutes: 4320}
+
+  # 4. Ví điện tử PH_WALLET_1 ngừng 20' (chỉ PH)
+  - name: ph_wallet_outage
+    category: PAYMENT
+    error_code: PAY_GATEWAY_TIMEOUT
+    step: 5_payment
+    kind: payment_provider
+    country: "PH"
+    payment_provider: "PH_WALLET_1"
+    fail_prob: 0.92
+    windows:
+      smoke: []
+      dev:
+        - {instance_idx: 1, day: 4, utc_hour: 0, minute: 0, duration_minutes: 20}
+        - {instance_idx: 2, day: 9, utc_hour: 9, minute: 30, duration_minutes: 20}
+        - {instance_idx: 3, day: 12, utc_hour: 0, minute: 15, duration_minutes: 20}
+      eval:
+        - {instance_idx: 1, day: 8, utc_hour: 0, minute: 0, duration_minutes: 20}
+        - {instance_idx: 2, day: 21, utc_hour: 0, minute: 0, duration_minutes: 20}
+        - {instance_idx: 3, day: 24, utc_hour: 9, minute: 30, duration_minutes: 20}
+        - {instance_idx: 4, day: 28, utc_hour: 0, minute: 15, duration_minutes: 20}
+
+  # 5. Hiển thị giờ trạm PH (+8) và ID-WITA (+8) để kiểm SF7
+  - name: tz_display
+    category: HARDWARE
+    error_code: CABINET_NO_ACK
+    step: 3_scan_qr
+    kind: tz_plus8
+    timezones: ["Asia/Manila", "Asia/Makassar"]
+    fail_prob: 0.65
+    windows:
+      smoke: []
+      dev:
+        - {instance_idx: 1, day: 5, utc_hour: 0, minute: 0, duration_minutes: 120}
+        - {instance_idx: 2, day: 10, utc_hour: 9, minute: 0, duration_minutes: 120}
+        - {instance_idx: 3, day: 13, utc_hour: 0, minute: 0, duration_minutes: 120}
+      eval:
+        - {instance_idx: 1, day: 10, utc_hour: 0, minute: 0, duration_minutes: 120}
+        - {instance_idx: 2, day: 22, utc_hour: 0, minute: 0, duration_minutes: 120}
+        - {instance_idx: 3, day: 27, utc_hour: 9, minute: 0, duration_minutes: 120}
+
+  # 6. Đã trừ tiền nhưng không nhả pin (PAYMENT P1, lỗi im lặng: captured=true, không có event bước 6/7)
+  - name: paid_not_delivered
+    category: PAYMENT
+    error_code: PAID_NOT_DELIVERED
+    step: 5_payment
+    kind: silent_paid_not_delivered
+    fail_prob: 0.45
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 1, minute: 0, duration_minutes: 90}
+      dev:
+        - {instance_idx: 1, day: 2, utc_hour: 1, minute: 0, duration_minutes: 90}
+        - {instance_idx: 2, day: 8, utc_hour: 10, minute: 0, duration_minutes: 90}
+        - {instance_idx: 3, day: 11, utc_hour: 1, minute: 0, duration_minutes: 90}
+      eval:
+        - {instance_idx: 1, day: 7, utc_hour: 1, minute: 0, duration_minutes: 90}
+        - {instance_idx: 2, day: 21, utc_hour: 10, minute: 0, duration_minutes: 90}
+        - {instance_idx: 3, day: 25, utc_hour: 1, minute: 0, duration_minutes: 90}
+        - {instance_idx: 4, day: 28, utc_hour: 10, minute: 0, duration_minutes: 90}
+
+  # 7. Lô pin SOH thấp (BATTERY_QUALITY, tập trung theo lot_id LOT-F)
+  - name: low_soh_lot
+    category: BATTERY_QUALITY
+    error_code: BAT_LOW_SOH
+    step: 7_receive_battery
+    kind: low_soh_lot
+    lot_id: "LOT-F"
+    fail_prob: 0.75
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 0, minute: 0, duration_minutes: 1440}
+      dev:
+        - {instance_idx: 1, day: 1, utc_hour: 0, minute: 0, duration_minutes: 4320}
+        - {instance_idx: 2, day: 7, utc_hour: 0, minute: 0, duration_minutes: 4320}
+        - {instance_idx: 3, day: 11, utc_hour: 0, minute: 0, duration_minutes: 4320}
+      eval:
+        - {instance_idx: 1, day: 3, utc_hour: 0, minute: 0, duration_minutes: 7200}
+        - {instance_idx: 2, day: 20, utc_hour: 0, minute: 0, duration_minutes: 7200}
+        - {instance_idx: 3, day: 25, utc_hour: 0, minute: 0, duration_minutes: 7200}
+
+  # 8. Thiếu pin đầy giờ cao điểm (BUSINESS, NO_CHARGED_BATTERY bước 4)
+  - name: peak_no_charged_battery
+    category: BUSINESS
+    error_code: NO_CHARGED_BATTERY
+    step: 4_check_eligibility
+    kind: peak_shortage
+    fail_prob: 0.45
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 10, minute: 0, duration_minutes: 120}
+      dev:
+        - {instance_idx: 1, day: 3, utc_hour: 10, minute: 0, duration_minutes: 120}
+        - {instance_idx: 2, day: 8, utc_hour: 0, minute: 30, duration_minutes: 120}
+        - {instance_idx: 3, day: 12, utc_hour: 10, minute: 0, duration_minutes: 120}
+      eval:
+        - {instance_idx: 1, day: 9, utc_hour: 10, minute: 0, duration_minutes: 120}
+        - {instance_idx: 2, day: 20, utc_hour: 0, minute: 30, duration_minutes: 120}
+        - {instance_idx: 3, day: 24, utc_hour: 10, minute: 0, duration_minutes: 120}
+        - {instance_idx: 4, day: 28, utc_hour: 0, minute: 30, duration_minutes: 120}
+
+  # 9. Thanh toán PENDING rồi thành công trong grace window 90s (is_failure=false, bẫy SF3)
+  - name: pending_then_ok
+    category: null
+    error_code: null
+    step: 5_payment
+    kind: pending_then_ok
+    fail_prob: 0.50
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 2, minute: 0, duration_minutes: 120}
+      dev:
+        - {instance_idx: 1, day: 2, utc_hour: 11, minute: 0, duration_minutes: 120}
+        - {instance_idx: 2, day: 9, utc_hour: 2, minute: 0, duration_minutes: 120}
+        - {instance_idx: 3, day: 13, utc_hour: 11, minute: 0, duration_minutes: 120}
+      eval:
+        - {instance_idx: 1, day: 6, utc_hour: 11, minute: 0, duration_minutes: 120}
+        - {instance_idx: 2, day: 21, utc_hour: 2, minute: 0, duration_minutes: 120}
+        - {instance_idx: 3, day: 26, utc_hour: 11, minute: 0, duration_minutes: 120}
+
+  # 10. error_message chứa prompt injection (giữ đúng nhóm lỗi thật, kiểm SF9)
+  - name: prompt_injection
+    category: HARDWARE
+    error_code: SLOT_SENSOR_FAIL
+    step: 6_return_battery
+    kind: prompt_injection
+    fail_prob: 0.60
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 4, minute: 0, duration_minutes: 90}
+      dev:
+        - {instance_idx: 1, day: 5, utc_hour: 2, minute: 0, duration_minutes: 90}
+        - {instance_idx: 2, day: 10, utc_hour: 11, minute: 0, duration_minutes: 90}
+        - {instance_idx: 3, day: 13, utc_hour: 2, minute: 0, duration_minutes: 90}
+      eval:
+        - {instance_idx: 1, day: 11, utc_hour: 2, minute: 0, duration_minutes: 90}
+        - {instance_idx: 2, day: 23, utc_hour: 2, minute: 0, duration_minutes: 90}
+        - {instance_idx: 3, day: 28, utc_hour: 11, minute: 0, duration_minutes: 90}
+
+  # 11. Lỗi im lặng STEP_TIMEOUT: phiên dừng phát event giữa chừng, không có event status=TIMEOUT
+  - name: step_timeout
+    category: HARDWARE
+    error_code: STEP_TIMEOUT
+    step: 6_return_battery
+    kind: silent_step_timeout
+    fail_prob: 0.45
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 5, minute: 0, duration_minutes: 90}
+      dev:
+        - {instance_idx: 1, day: 4, utc_hour: 10, minute: 0, duration_minutes: 90}
+        - {instance_idx: 2, day: 9, utc_hour: 11, minute: 0, duration_minutes: 90}
+        - {instance_idx: 3, day: 12, utc_hour: 11, minute: 0, duration_minutes: 90}
+      eval:
+        - {instance_idx: 1, day: 12, utc_hour: 10, minute: 0, duration_minutes: 90}
+        - {instance_idx: 2, day: 22, utc_hour: 11, minute: 0, duration_minutes: 90}
+        - {instance_idx: 3, day: 26, utc_hour: 1, minute: 0, duration_minutes: 90}
+
+  # 12. Quá nhiệt pin/tủ (>55°C cảnh báo mức 1 BAT_RETURN_FAULT P1; >60°C cảnh báo mức 2 + ngắt nguồn tủ)
+  - name: thermal_overload
+    category: BATTERY_QUALITY
+    error_code: BAT_RETURN_FAULT
+    step: 6_return_battery
+    kind: thermal_overload
+    fail_prob: 0.70
+    windows:
+      smoke:
+        - {instance_idx: 1, day: 0, utc_hour: 7, minute: 0, duration_minutes: 60}
+      dev:
+        - {instance_idx: 1, day: 6, utc_hour: 7, minute: 0, duration_minutes: 60}
+        - {instance_idx: 2, day: 10, utc_hour: 7, minute: 0, duration_minutes: 60}
+        - {instance_idx: 3, day: 13, utc_hour: 7, minute: 0, duration_minutes: 60}
+      eval:
+        - {instance_idx: 1, day: 13, utc_hour: 7, minute: 0, duration_minutes: 60}
+        - {instance_idx: 2, day: 23, utc_hour: 7, minute: 0, duration_minutes: 60}
+        - {instance_idx: 3, day: 29, utc_hour: 7, minute: 0, duration_minutes: 60}
