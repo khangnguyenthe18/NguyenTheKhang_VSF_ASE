@@ -1,0 +1,14 @@
+# Chính sách routing (CLAUDE.md §6.1, §10): OPS là 1 đội trung tâm, routing theo category.
+# `country_overrides` hỗ trợ khoá (country, category) để sau này tách đội theo nước mà không sửa code.
+routes:
+  SYSTEM:          {team: "IT Ops",       alert: true}
+  HARDWARE:        {team: "Field Ops",    alert: true}
+  PAYMENT:         {team: "Payment Ops",  alert: true}
+  BUSINESS:        {team: "Business Ops", alert: true}
+  USER:            {team: null,           alert: false}  # chỉ thống kê; alert khi tăng đột biến
+  BATTERY_QUALITY: {team: "Battery Ops",  alert: true}
+  UNKNOWN:         {team: "IT Ops",       alert: true, needs_human_review: true}
+
+country_overrides: []
+# ví dụ: - {country: PH, category: PAYMENT, team: "Payment Ops PH"}
+

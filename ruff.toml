@@ -1,0 +1,7 @@
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "DTZ", "RUF"]
+# DTZ: cấm datetime naive / datetime.now() không tz (ràng buộc CLAUDE.md §3.9)
+

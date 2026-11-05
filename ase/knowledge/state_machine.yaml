@@ -1,0 +1,22 @@
+# Máy trạng thái phiên đổi pin (CLAUDE.md §2). SLA cấu hình được, đơn vị giây.
+# Bước 1–2 không có SLA (null): tracker chỉ theo dõi từ bước 3.
+steps:
+  1_open_app:         {service: "App backend, Auth",        sla_seconds: null, next: 2_select_service}
+  2_select_service:   {service: "Station service",          sla_seconds: null, next: 3_scan_qr}
+  3_scan_qr:          {service: "Session service, QR",      sla_seconds: 15,   next: 4_check_eligibility}
+  4_check_eligibility: {service: "Eligibility service",     sla_seconds: 10,   next: 5_payment}
+  5_payment:          {service: "Payment gateway",          sla_seconds: 90,   next: 6_return_battery}  # grace window callback
+  6_return_battery:   {service: "Cabinet IoT gateway",      sla_seconds: 120,  next: 7_receive_battery}
+  7_receive_battery:  {service: "Cabinet IoT, BMS",         sla_seconds: 120,  next: null}
+
+# Chuyển trạng thái hợp lệ BÊN TRONG một bước (status event).
+# OK/FAILED/TIMEOUT là trạng thái kết thúc của bước; PENDING có thể chuyển tiếp.
+status_transitions:
+  PENDING: [OK, FAILED, TIMEOUT]
+  OK: []
+  FAILED: []
+  TIMEOUT: []
+
+# Phiên kết thúc (không có bước tiếp) khi: bước 7 OK, hoặc bất kỳ bước FAILED/TIMEOUT.
+terminal_statuses: [FAILED, TIMEOUT]
+

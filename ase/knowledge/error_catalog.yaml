@@ -1,0 +1,79 @@
+# Error catalog v0 (CLAUDE.md §6.2) + MOCK_PLAN §3a. Code KHÔNG được hardcode catalog: luôn đọc file này.
+# default_category: luôn thuộc enum Category (rule/detector dùng giá trị này).
+# possible_categories: các nhóm thật có thể xảy ra khi mã không 1-1 với nhóm.
+# escalation_condition: nâng mức độ khi điều kiện đúng; `threshold` tham chiếu khối `thresholds`.
+thresholds:
+  temp_warn_1_c: 55          # > ~55°C: cảnh báo lần 1
+  temp_warn_2_c: 60          # > ~60°C: cảnh báo lần 2 + tự ngắt nguồn tủ
+  temp_noise_c: 1.0          # nhiễu nhỏ quanh ngưỡng khi mô phỏng
+  cabinet_shutdown_minutes: 30   # thời gian tủ ngừng phục vụ sau khi ngắt nguồn
+  hw_warn_level_1_code: HW_TEMP_WARN_1
+  hw_warn_level_2_code: HW_TEMP_WARN_2
+  low_soc_pct: 20
+  low_soh_pct: 70
+  swap_slow_seconds: 180
+
+errors:
+  # --- Bước 1–2 ---
+  - {code: APP_CRASH, description: "App crash/treo", steps: [1_open_app, 2_select_service], default_category: SYSTEM, severity: P2}
+  - {code: AUTH_FAILED, description: "Auth service lỗi", steps: [1_open_app], default_category: SYSTEM, severity: P2}
+  - {code: TOKEN_EXPIRED, description: "Hết phiên đăng nhập", steps: [1_open_app], default_category: USER, severity: P3}
+  - {code: ACCOUNT_LOCKED, description: "Tài khoản bị khoá", steps: [1_open_app], default_category: BUSINESS, severity: P3}
+  - {code: STATION_LIST_FAIL, description: "Không tải được danh sách trạm", steps: [2_select_service], default_category: SYSTEM, severity: P2}
+  - {code: STATION_DATA_STALE, description: "App hiển thị sai số pin/trạng thái", steps: [2_select_service], default_category: SYSTEM, severity: P2}
+  - {code: STATION_OFFLINE, description: "Trạm offline/bảo trì", steps: [2_select_service], default_category: HARDWARE, severity: P2}
+  - {code: NO_CHARGED_BATTERY, description: "Hết pin đầy", steps: [2_select_service, 4_check_eligibility], default_category: BUSINESS, severity: P2}
+  # --- Bước 3 ---
+  - {code: QR_INVALID, description: "QR sai/hết hạn", steps: [3_scan_qr], default_category: USER, severity: P3}
+  - {code: QR_WRONG_STATION, description: "QR không khớp vị trí", steps: [3_scan_qr], default_category: USER, severity: P3}
+  - {code: SESS_CREATE_5XX, description: "Session service lỗi", steps: [3_scan_qr], default_category: SYSTEM, severity: P2}
+  - {code: SESS_DUPLICATE, description: "Phiên cũ chưa đóng", steps: [3_scan_qr], default_category: SYSTEM, severity: P2}
+  - {code: CABINET_NO_ACK, description: "Tủ không phản hồi lệnh", steps: [3_scan_qr], default_category: HARDWARE, severity: P2}
+  - {code: CABINET_BUSY, description: "Tủ đang phục vụ phiên khác", steps: [3_scan_qr], default_category: BUSINESS, severity: P3}
+  # --- Bước 4 ---
+  - {code: ELIG_PACKAGE_EXPIRED, description: "Gói hết hạn", steps: [4_check_eligibility], default_category: BUSINESS, severity: P3}
+  - {code: ELIG_DEBT, description: "Nợ cước", steps: [4_check_eligibility], default_category: BUSINESS, severity: P3}
+  - {code: ELIG_QUOTA_EXCEEDED, description: "Vượt hạn mức", steps: [4_check_eligibility], default_category: BUSINESS, severity: P3}
+  - {code: ELIG_BATTERY_NOT_OWNED, description: "Pin không thuộc hợp đồng", steps: [4_check_eligibility], default_category: BUSINESS, severity: P1}
+  - {code: ELIG_SERVICE_ERROR, description: "Eligibility service lỗi", steps: [4_check_eligibility], default_category: SYSTEM, severity: P2}
+  - {code: ELIG_FALSE_REJECT, description: "Đủ điều kiện nhưng bị từ chối", steps: [4_check_eligibility], default_category: SYSTEM, severity: P2}
+  # --- Bước 5 ---
+  - {code: PAY_GATEWAY_TIMEOUT, description: "Gateway timeout/lỗi", steps: [5_payment], default_category: PAYMENT, severity: P2}
+  - {code: PAY_DECLINED, description: "Thẻ bị từ chối/không đủ số dư", steps: [5_payment], default_category: USER, severity: P3}
+  - {code: PAY_USER_CANCEL, description: "Khách huỷ", steps: [5_payment], default_category: USER, severity: P3}
+  - {code: PAY_CALLBACK_LATE, description: "Callback trễ", steps: [5_payment], default_category: PAYMENT, severity: P2}
+  - {code: PAY_CALLBACK_LOST, description: "Mất callback", steps: [5_payment], default_category: PAYMENT, severity: P1}
+  - {code: PAY_DOUBLE_CHARGE, description: "Trừ tiền 2 lần", steps: [5_payment], default_category: PAYMENT, severity: P1}
+  - {code: PAY_WRONG_AMOUNT, description: "Tính sai tiền", steps: [5_payment], default_category: SYSTEM, severity: P1}
+  # --- Bước 6 ---
+  - {code: SLOT_DOOR_JAM, description: "Khoang không mở", steps: [6_return_battery], default_category: HARDWARE, severity: P2}
+  - {code: SLOT_SENSOR_FAIL, description: "Pin đặt vào không nhận", steps: [6_return_battery], default_category: HARDWARE, severity: P2}
+  - {code: SLOT_LOCK_FAIL, description: "Khoang không đóng/khoá", steps: [6_return_battery], default_category: HARDWARE, severity: P1}
+  - {code: USR_RETURN_TIMEOUT, description: "Khách không đặt pin kịp", steps: [6_return_battery], default_category: USER, severity: P3}
+  - {code: RETURN_FOREIGN_BATTERY, description: "Pin trả vào là pin lạ", steps: [6_return_battery], default_category: BUSINESS, severity: P1}
+  - description: "Pin cũ lỗi BMS/quá nhiệt"
+    code: BAT_RETURN_FAULT
+    steps: [6_return_battery]
+    default_category: BATTERY_QUALITY
+    severity: P2
+    escalation_condition: {field: temperature, op: ">", threshold: temp_warn_1_c, severity: P1}
+  - {code: CABINET_DISCONNECT, description: "Tủ mất kết nối giữa phiên", steps: [6_return_battery], default_category: HARDWARE, severity: P2}
+  # --- Bước 7 ---
+  - {code: SLOT_OUT_DOOR_JAM, description: "Khoang pin mới không mở", steps: [7_receive_battery], default_category: HARDWARE, severity: P2}
+  - {code: BAT_LOW_SOC, description: "Pin xuất SOC thấp", steps: [7_receive_battery], default_category: BATTERY_QUALITY, severity: P2}
+  - {code: BAT_LOW_SOH, description: "Pin xuất SOH thấp", steps: [7_receive_battery], default_category: BATTERY_QUALITY, severity: P2}
+  - {code: BAT_BMS_FAULT, description: "Pin mới lỗi BMS", steps: [7_receive_battery], default_category: BATTERY_QUALITY, severity: P1}
+  - {code: BAT_PAIRING_FAIL, description: "Pin không ghép được với xe", steps: [7_receive_battery], default_category: BATTERY_QUALITY, possible_categories: [BATTERY_QUALITY, SYSTEM], severity: P2}
+  - {code: USR_NOT_COLLECTED, description: "Khách không lấy pin", steps: [7_receive_battery], default_category: USER, severity: P2}
+  - {code: ASSET_NOT_ASSIGNED, description: "Pin mới chưa gán cho khách", steps: [7_receive_battery], default_category: SYSTEM, severity: P1}
+  # --- Xuyên bước (lỗi im lặng) ---
+  - {code: STEP_TIMEOUT, description: "Kẹt bước quá SLA", steps: [], default_category: UNKNOWN, possible_categories: [SYSTEM, HARDWARE, PAYMENT, BUSINESS, USER, BATTERY_QUALITY], severity: P2}
+  - {code: PAID_NOT_DELIVERED, description: "Trừ tiền nhưng không nhả pin", steps: [], default_category: PAYMENT, severity: P1}
+  - {code: DELIVERED_NOT_PAID, description: "Nhả pin nhưng chưa thu tiền", steps: [], default_category: PAYMENT, severity: P1}
+  - {code: SESSION_DANGLING, description: "Phiên không đóng, giữ khoang", steps: [], default_category: SYSTEM, severity: P2}
+  - {code: ASSET_MISMATCH, description: "Pin lệch sổ tài sản", steps: [], default_category: SYSTEM, severity: P1}
+  - {code: CABINET_OVERHEAT, description: "Tủ/khoang quá nhiệt", steps: [], default_category: HARDWARE, severity: P1}
+  - {code: SWAP_SLOW, description: "Thành công nhưng quá chậm", steps: [], default_category: SYSTEM, possible_categories: [SYSTEM, HARDWARE], severity: P3}
+  - {code: USR_RETRY_STORM, description: "User retry liên tục", steps: [], default_category: USER, severity: P3}
+  - {code: FRAUD_PATTERN, description: "Hành vi đổi pin bất thường", steps: [], default_category: BUSINESS, severity: P1}
+

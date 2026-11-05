@@ -1,0 +1,14 @@
+{
+  "event_id": "evt-SW20261104-000123-3-0",
+  "session_id": "SW20261104-000123",
+  "station_id": "HN-CG-012",
+  "cabinet_id": "CAB-03",
+  "slot_id": "07",
+  "step": "3_scan_qr",
+  "status": "FAILED",
+  "error_code": "SESS_CREATE_5XX",
+  "error_message": "Session service returned 503",
+  "latency_ms": 2450,
+  "occurred_at": "2026-11-04T10:53:12.400Z"
+}
+
