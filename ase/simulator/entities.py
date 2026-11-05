@@ -35,6 +35,9 @@ class World:
     cabinets_of_station: dict[str, list[CabinetInfo]] = field(default_factory=dict)
     cabinet_info: dict[str, CabinetInfo] = field(default_factory=dict)
     battery_by_id: dict[str, Battery] = field(default_factory=dict)
+    healthy_batteries: list[Battery] = field(default_factory=list)
+    low_soh_batteries: list[Battery] = field(default_factory=list)
+    user_by_id: dict[str, User] = field(default_factory=dict)
     users_by_country_state: dict[tuple[str, str], list[User]] = field(default_factory=dict)
     user_state: dict[str, str] = field(default_factory=dict)
 
@@ -94,7 +97,7 @@ def build_world(profile: ProfileSpec, common: CommonSpec, knowledge: Knowledge) 
                 )
                 slot_ids = tuple(f"{s:02d}" for s in range(1, common.slots_per_cabinet + 1))
                 battery_by_slot: dict[str, str] = {}
-                for s_idx, slot_id in enumerate(slot_ids):
+                for slot_id in slot_ids:
                     world.slots.append(
                         Slot(
                             slot_id=slot_id,
@@ -107,12 +110,9 @@ def build_world(profile: ProfileSpec, common: CommonSpec, knowledge: Knowledge) 
                         )
                     )
                     battery_seq += 1
-                    # Khoang cuối mỗi tủ luôn có pin thuộc lô SOH thấp (LOT-F)
-                    lot = low_lot if s_idx == len(slot_ids) - 1 else rng.choice(lot_ids[:-1])
-                    if lot == low_lot:
-                        soh = min(68.5, max(56.0, rng.gauss(lot_soh_mean[lot], 2.0)))
-                    else:
-                        soh = min(100.0, max(75.0, rng.gauss(lot_soh_mean[lot], 2.0)))
+                    # Pin trong khoang mặc định thuộc các lô khỏe (LOT-A..LOT-E, SOH >= 80%)
+                    lot = rng.choice(lot_ids[:-1])
+                    soh = min(100.0, max(80.0, rng.gauss(lot_soh_mean[lot], 2.0)))
                     battery = Battery(
                         battery_id=f"BAT-{battery_seq:05d}",
                         lot_id=lot,
@@ -120,11 +120,27 @@ def build_world(profile: ProfileSpec, common: CommonSpec, knowledge: Knowledge) 
                         cycle_count=int((100 - soh) * 25 + rng.randint(0, 80)),
                     )
                     world.batteries.append(battery)
+                    world.healthy_batteries.append(battery)
                     world.battery_by_id[battery.battery_id] = battery
                     battery_by_slot[slot_id] = battery.battery_id
                 info = CabinetInfo(cabinet_id, station_id, slot_ids, battery_by_slot)
                 world.cabinets_of_station[station_id].append(info)
                 world.cabinet_info[cabinet_id] = info
+
+    # Tạo lô pin SOH thấp (LOT-F, SOH < 70%) tách riêng chỉ dành cho scenario `low_soh_lot`
+    low_rng = substream(seed, "entities", "low_soh_lot")
+    for _ in range(max(12, len(world.cabinets) * 2)):
+        battery_seq += 1
+        soh = min(68.5, max(58.0, low_rng.gauss(lot_soh_mean[low_lot], 2.0)))
+        low_bat = Battery(
+            battery_id=f"BAT-{battery_seq:05d}",
+            lot_id=low_lot,
+            soh=round(soh, 1),
+            cycle_count=int((100 - soh) * 25 + low_rng.randint(20, 100)),
+        )
+        world.batteries.append(low_bat)
+        world.low_soh_batteries.append(low_bat)
+        world.battery_by_id[low_bat.battery_id] = low_bat
 
     _build_users(world, profile, common, knowledge, start)
     return world
@@ -162,5 +178,6 @@ def _build_users(
                 debt_flag=state == USER_DEBT,
             )
             world.users.append(user)
+            world.user_by_id[user.user_id] = user
             world.user_state[user.user_id] = state
             world.users_by_country_state.setdefault((country, state), []).append(user)

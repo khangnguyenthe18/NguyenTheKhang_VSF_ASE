@@ -117,7 +117,7 @@ def run_session(ctx: SimContext, arrival: Arrival, session_id: str) -> SessionRe
     app_version = rng.choice(common.app_versions)
     cabinet = rng.choice(world.cabinets_of_station[station.station_id])
     slot_in, slot_out = rng.sample(cabinet.slot_ids, 2)
-    battery_in = rng.choice(world.batteries)
+    battery_in = rng.choice(world.healthy_batteries)
     provider = rng.choice(providers)
 
     omit_code = bool(
@@ -135,6 +135,14 @@ def run_session(ctx: SimContext, arrival: Arrival, session_id: str) -> SessionRe
         latency = max(1, round(rng.lognormvariate(0, 0.35) * common.latency_median_ms[step]))
         is_fail = idx == fail_idx
         step_slot = slot_in if idx == 5 else slot_out if idx == 6 else None
+        if is_fail and code:
+            err_msg = (
+                "Swap step failed with unmapped upstream status"
+                if omit_code
+                else catalog.by_code[code].description
+            )
+        else:
+            err_msg = None
         events.append(
             SwapEvent(
                 event_id=ids.event_id(session_id, idx + 1),
@@ -145,7 +153,7 @@ def run_session(ctx: SimContext, arrival: Arrival, session_id: str) -> SessionRe
                 step=step,
                 status=failure.status if is_fail and failure else "OK",
                 error_code=None if (not is_fail or omit_code) else code,
-                error_message=catalog.by_code[code].description if is_fail and code else None,
+                error_message=err_msg,
                 latency_ms=latency,
                 occurred_at=t_end,
             )
@@ -177,7 +185,8 @@ def run_session(ctx: SimContext, arrival: Arrival, session_id: str) -> SessionRe
         )
 
     # --- telemetry quanh phiên ---
-    soc_in, soc_out = rng.uniform(10, 40), rng.uniform(90, 100)
+    soc_in = rng.uniform(10, 40)
+    soc_out = rng.uniform(11.0, 18.5) if code == "BAT_LOW_SOC" else rng.uniform(90, 100)
     ambient = rng.uniform(*common.ambient_temp_c)
     telemetry = session_rows(
         cabinet_id=cabinet.cabinet_id,

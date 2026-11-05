@@ -48,6 +48,7 @@ class CountRow(BaseModel):
 class Manifest(BaseModel):
     profile: str
     seed: int
+    test_seed: int | None = None
     git_sha: str
     files: dict[str, FileInfo]
     counts: list[CountRow]
@@ -250,6 +251,7 @@ async def generate(
     manifest = Manifest(
         profile=profile_name,
         seed=profile.seed,
+        test_seed=profile.test_seed,
         git_sha=await _git_sha(repo_root or Path.cwd()),
         files=files,
         counts=[

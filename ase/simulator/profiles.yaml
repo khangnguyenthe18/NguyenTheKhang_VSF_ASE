@@ -54,12 +54,12 @@ common:
     - {code: USR_RETURN_TIMEOUT, weight: 6, status: TIMEOUT}
     - {code: USR_NOT_COLLECTED, weight: 2, status: TIMEOUT}
     # BUSINESS
-    - {code: ELIG_DEBT, weight: 5}
-    - {code: ELIG_PACKAGE_EXPIRED, weight: 5}
+    - {code: ELIG_DEBT, weight: 5, omit_code_allowed: true}
+    - {code: ELIG_PACKAGE_EXPIRED, weight: 5, omit_code_allowed: true}
     - {code: ACCOUNT_LOCKED, weight: 2}
     # HARDWARE / SYSTEM / PAYMENT / BATTERY_QUALITY rải rác
     - {code: SLOT_SENSOR_FAIL, weight: 5, omit_code_allowed: true}
-    - {code: CABINET_NO_ACK, weight: 4, omit_code_allowed: true}
+    - {code: CABINET_NO_ACK, weight: 4}
     - {code: ELIG_SERVICE_ERROR, weight: 3}
     - {code: PAY_GATEWAY_TIMEOUT, weight: 4}
     - {code: BAT_LOW_SOC, weight: 4, omit_code_allowed: true}

@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import itertools
 from collections import Counter
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
+import orjson
 import polars as pl
 import pytest
 
@@ -19,7 +20,11 @@ from ase.simulator.generator import generate, ordered_events, simulate
 from ase.simulator.ground_truth import build_row
 from ase.simulator.profiles import BackgroundFailure, load_profiles
 from ase.simulator.replay import replay_file
-from ase.simulator.scenarios import PROMPT_INJECTION_PAYLOAD, load_scenarios
+from ase.simulator.scenarios import (
+    GENERIC_UNMAPPED_MESSAGE,
+    PROMPT_INJECTION_PAYLOAD,
+    load_scenarios,
+)
 from ase.simulator.session_fsm import SessionResult, step_chain
 from ase.simulator.traffic import hourly_weights
 
@@ -162,9 +167,9 @@ def test_background_fail_rate_and_mostly_user(
 
 
 def test_payment_rules(
-    dev_bg: tuple[World, list[SessionResult], list[CabinetTelemetry]],
+    dev_full: tuple[World, list[SessionResult], list[CabinetTelemetry]],
 ) -> None:
-    _, results, _ = dev_bg
+    world, results, _ = dev_full
     for r in results:
         country = K.countries.countries[r.country]
         reached_payment = any(e.step is Step.PAYMENT for e in r.events)
@@ -172,14 +177,28 @@ def test_payment_rules(
         if r.payment is None:
             continue
         assert r.payment.currency == country.currency
-        assert r.payment.amount in {
-            country.pricing.standard_swap_amount(p) for p in country.pricing.packages
-        }
+        user_pkg = world.user_by_id[r.session.user_id].package_type
+        # Số tiền thanh toán luôn khớp đúng gói thuê của user (không hardcode RENT_1)
+        assert r.payment.amount == country.pricing.standard_swap_amount(user_pkg)
         assert r.session.payment_provider in country.payment_providers
         if r.label is None:
             assert r.payment.captured and r.payment.status == "SUCCESS"
+        elif r.label.error_code == "PAID_NOT_DELIVERED":
+            assert r.payment.captured and r.payment.status == "SUCCESS"
         else:
             assert not r.payment.captured
+
+
+def test_bat_low_soc_has_low_soc_telemetry(
+    dev_full: tuple[World, list[SessionResult], list[CabinetTelemetry]],
+) -> None:
+    _, results, _ = dev_full
+    low_soc = [r for r in results if r.label and r.label.error_code == "BAT_LOW_SOC"]
+    assert low_soc
+    for r in low_soc:
+        out_rows = [t for t in r.telemetry if t.slot_id == r.session.slot_out and t.soc is not None]
+        assert out_rows
+        assert all((t.soc or 100.0) < K.error_catalog.thresholds.low_soc_pct for t in out_rows)
 
 
 def test_pre_payment_failures_have_no_provider(
@@ -238,20 +257,22 @@ def test_test_seed_differs_from_dev_seed() -> None:
     assert p.seed_for_day(25) == p.test_seed != p.seed
 
 
-def test_missing_error_code_rate() -> None:
-    cfg = PROFILES.model_copy(deep=True)
-    cfg.common.background_fail_rate = 1.0
-    cfg.common.missing_error_code_rate = 0.2
-    cfg.common.background_failures = [
-        BackgroundFailure(code="SLOT_SENSOR_FAIL", weight=1, omit_code_allowed=True),
-        BackgroundFailure(code="CABINET_NO_ACK", weight=1, omit_code_allowed=True),
+def test_missing_error_code_rate(
+    dev_full: tuple[World, list[SessionResult], list[CabinetTelemetry]],
+) -> None:
+    _, results, _ = dev_full
+    all_fails = [r for r in results if r.label is not None]
+    explicit_missing = [
+        r
+        for r in all_fails
+        if r.events[-1].status in ("FAILED", "TIMEOUT") and r.events[-1].error_code is None
     ]
-    _, results, _ = simulate("smoke", K, cfg, inject_scenarios=False)
-    omitted = [r for r in results if r.events[-1].error_code is None]
-    assert 0.1 <= len(omitted) / len(results) <= 0.3
-    for r in omitted:
-        assert r.label is not None and r.label.category is Category.HARDWARE
-        assert r.events[-1].status == "FAILED"
+    rate = len(explicit_missing) / len(all_fails)
+    assert 0.07 <= rate <= 0.13, rate
+    for r in explicit_missing:
+        assert r.label is not None and r.label.category is not Category.UNKNOWN
+        # Không lộ mô tả catalog trong error_message khi đã bỏ error_code
+        assert r.events[-1].error_message == GENERIC_UNMAPPED_MESSAGE
 
 
 # --- bước 9: 11 scenario + lỗi im lặng + ngưỡng nhiệt -----------------------------------------
@@ -365,13 +386,29 @@ def test_low_soh_lot_and_peak_no_charged_battery(
         assert bat.lot_id == SCENARIOS.lot_low_soh_id and bat.soh < 70.0
         assert r.label is not None and r.label.error_code == "BAT_LOW_SOH"
 
+    # Phiên ngoài scenario low_soh_lot tuyệt đối không nhận pin LOT-F (SOH < 70%)
+    for r in results:
+        if r.label and r.label.scenario == "low_soh_lot":
+            continue
+        for bid in (r.session.battery_in_id, r.session.battery_out_id):
+            if bid is not None:
+                bat = world.battery_by_id[bid]
+                assert bat.lot_id != SCENARIOS.lot_low_soh_id
+                assert bat.soh >= 75.0
+
     peak = [r for r in results if r.label and r.label.scenario == "peak_no_charged_battery"]
     assert peak
     tz_of = {s.station_id: s.timezone for s in world.stations}
+    stations_by_inst: dict[str, set[str]] = {}
     for r in peak:
         assert r.label is not None and r.label.error_code == "NO_CHARGED_BATTERY"
         assert r.label.category is Category.BUSINESS
         assert to_local(r.session.started_at, tz_of[r.session.station_id]).hour in (7, 8, 17, 18)
+        assert r.label.scenario_instance_id is not None
+        stations_by_inst.setdefault(r.label.scenario_instance_id, set()).add(r.session.station_id)
+    # Mỗi đợt thiếu pin cao điểm tập trung đúng tại 1 trạm
+    for st_set in stations_by_inst.values():
+        assert len(st_set) == 1
 
 
 def test_pending_then_ok_is_not_failure(
@@ -458,17 +495,27 @@ def test_thermal_overload_55c_p1_and_60c_shutdown(
 # --- bước 10 & 11: disorder, replay, checks, determinism --------------------------------------
 
 
-def test_disorder_preserves_sessions_and_creates_duplicates_and_late_events(
-    smoke_bg: tuple[World, list[SessionResult], list[CabinetTelemetry]],
+def test_disorder_preserves_sessions_and_bounds_late_delay(
+    dev_full: tuple[World, list[SessionResult], list[CabinetTelemetry]],
 ) -> None:
-    _, results, _ = smoke_bg
+    _, results, _ = dev_full
     ordered = ordered_events(results)
-    disordered = apply_disorder(ordered, seed=42)
+    disordered = apply_disorder(ordered, seed=1042)
     assert len(disordered) > len(ordered)
     assert {e.session_id for e in disordered} == {e.session_id for e in ordered}
     assert {e.event_id for e in disordered} == {e.event_id for e in ordered}
-    # Có ít nhất 1 dòng đến trễ (occurred_at nhỏ hơn dòng đứng trước)
     assert any(a.occurred_at > b.occurred_at for a, b in itertools.pairwise(disordered))
+
+    # Không có event nào bị trễ quá 8 giây so với SimClock (nhỏ hơn SLA tối thiểu 10 giây)
+    max_ts: datetime | None = None
+    max_lag_s = 0.0
+    for ev in disordered:
+        if max_ts is not None and ev.occurred_at < max_ts:
+            lag = (max_ts - ev.occurred_at).total_seconds()
+            max_lag_s = max(max_lag_s, lag)
+        if max_ts is None or ev.occurred_at > max_ts:
+            max_ts = ev.occurred_at
+    assert 0.5 <= max_lag_s <= 8.0
 
 
 async def test_generate_smoke_outputs_determinism_and_replay(tmp_path: Path) -> None:
@@ -479,6 +526,9 @@ async def test_generate_smoke_outputs_determinism_and_replay(tmp_path: Path) -> 
     out = tmp_path / "a"
     gt = pl.read_csv(out / "ground_truth.csv")
     ev_lines = (out / "ase.swap.events.jsonl").read_text().splitlines()
+    expected_keys = set(SwapEvent.model_fields)
+    for line in ev_lines:
+        assert set(orjson.loads(line)) == expected_keys
     events = [SwapEvent.model_validate_json(line) for line in ev_lines]
     assert all(e.occurred_at.tzinfo is not None for e in events)
     assert gt.height == len({e.session_id for e in events})
