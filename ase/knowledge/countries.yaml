@@ -1,6 +1,12 @@
 # Nước đã triển khai (CLAUDE.md §10): chỉ VN, PH, ID. Thêm nước = thêm khối ở đây, không sửa code.
-# Giá là số liệu MOCK theo currency từng nước (không phải bảng giá thật).
-package_types: [PKG_BASIC, PKG_STANDARD, PKG_PREMIUM]
+# Bảng giá: chính sách VinFast do chủ dự án cung cấp 05/11/2026.
+#   swap_fee      : phí /pin/lần đổi (currency của nước).
+#   packages      : gói thuê pin (RENT_1/RENT_2 mọi nước; FLEET = vận doanh Green SM, chỉ VN).
+#                   Pin mua đứt không dùng được dịch vụ đổi pin → không có gói, simulator không sinh.
+#   promotions    : ưu đãi miễn phí; free_swaps_per_month: null = không giới hạn;
+#                   duration_months tính từ ngày kích hoạt gói của user.
+# Simulator mặc định pricing_mode=standard_fee: mọi lần đổi tính swap_fee × số pin, bỏ qua promotions
+# (để bước 5 luôn có giao dịch tiền). promotions lưu để dùng sau (pricing_mode=promo).
 
 countries:
   VN:
@@ -8,17 +14,36 @@ countries:
     currency: VND
     timezones: [Asia/Ho_Chi_Minh]
     payment_providers: [VN_WALLET_1, VN_WALLET_2, VN_CARD]
-    swap_price: {PKG_BASIC: 30000, PKG_STANDARD: 25000, PKG_PREMIUM: 20000}
+    pricing:
+      swap_fee: 9000
+      packages:
+        RENT_1: {batteries: 1, monthly_fee: 175000, deposit: 500000}
+        RENT_2: {batteries: 2, monthly_fee: 300000, deposit: 1000000}
+        FLEET: {batteries: 1, monthly_fee: 175000, deposit: 500000}  # Green SM; phí thuê chưa có nguồn → giả định = RENT_1
+      promotions:
+        - {id: VN_PERSONAL_FREE, packages: [RENT_1, RENT_2], until: 2028-06-30, free_swaps_per_month: null}
+        - {id: VN_PERSONAL_AFTER, packages: [RENT_1, RENT_2], from: 2028-07-01, free_swaps_per_month: 20}
+        - {id: VN_FLEET_GSM_3Y, packages: [FLEET], duration_months: 36, free_swaps_per_month: null}
   PH:
     traffic_weight: 0.17
     currency: PHP
     timezones: [Asia/Manila]
     payment_providers: [PH_WALLET_1, PH_CARD]
-    swap_price: {PKG_BASIC: 60, PKG_STANDARD: 50, PKG_PREMIUM: 40}
+    pricing:
+      swap_fee: 35
+      packages:
+        RENT_1: {batteries: 1, monthly_fee: 439}  # chưa có thông tin tiền cọc
+        RENT_2: {batteries: 2, monthly_fee: 878}  # 439/pin × 2
+      promotions:
+        - {id: PH_FIRST_YEAR, packages: [RENT_1, RENT_2], duration_months: 12, free_swaps_per_month: 20}
   ID:
     traffic_weight: 0.13
     currency: IDR
     timezones: [Asia/Jakarta, Asia/Makassar]  # WIB + WITA: 2 múi giờ trong 1 nước
     payment_providers: [ID_WALLET_1, ID_CARD]
-    swap_price: {PKG_BASIC: 20000, PKG_STANDARD: 17000, PKG_PREMIUM: 14000}
-
+    pricing:
+      swap_fee: 6000
+      packages:
+        RENT_1: {batteries: 1, monthly_fee: 84000}  # chưa có thông tin tiền cọc
+        RENT_2: {batteries: 2, monthly_fee: 168000}  # 84.000/pin × 2
+      promotions: []

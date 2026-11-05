@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -158,12 +159,49 @@ class Routing(_Strict):
 # --- countries.yaml ---------------------------------------------------------
 
 
+class PackageSpec(_Strict):
+    batteries: int = Field(ge=1)
+    monthly_fee: float = Field(ge=0)
+    deposit: float | None = Field(default=None, ge=0)
+
+
+class Promotion(_Strict):
+    id: str
+    packages: list[str] = Field(min_length=1)
+    from_: date | None = Field(default=None, alias="from")
+    until: date | None = None
+    duration_months: int | None = Field(default=None, ge=1)
+    free_swaps_per_month: int | None = Field(default=None, ge=0)  # None = không giới hạn
+
+
+class PricingSpec(_Strict):
+    swap_fee: float = Field(gt=0)  # /pin/lần đổi
+    packages: dict[str, PackageSpec] = Field(min_length=1)
+    promotions: list[Promotion] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _promos_valid(self) -> PricingSpec:
+        for p in self.promotions:
+            unknown = set(p.packages) - set(self.packages)
+            if unknown:
+                raise ValueError(f"promotion {p.id} trỏ gói không tồn tại: {sorted(unknown)}")
+        return self
+
+    def standard_swap_amount(self, package_type: str) -> float:
+        """Tiền 1 lần đổi ở pricing_mode=standard_fee: swap_fee * số pin của gói, bỏ qua ưu đãi.
+
+        Vì sao bỏ qua ưu đãi: thời điểm mock (11/2026) gần như mọi phiên VN/PH được miễn phí,
+        bước 5 sẽ không có giao dịch tiền để kiểm chứng PAYMENT/PAY_WRONG_AMOUNT.
+        """
+        return self.swap_fee * self.packages[package_type].batteries
+
+
 class CountrySpec(_Strict):
     traffic_weight: float = Field(gt=0)
     currency: str
     timezones: list[str] = Field(min_length=1)
     payment_providers: list[str] = Field(min_length=1)
-    swap_price: dict[str, float]
+    pricing: PricingSpec
 
     @model_validator(mode="after")
     def _tz_valid(self) -> CountrySpec:
@@ -173,18 +211,20 @@ class CountrySpec(_Strict):
 
 
 class Countries(_Strict):
-    package_types: list[str]
     countries: dict[str, CountrySpec]
 
     @model_validator(mode="after")
     def _check(self) -> Countries:
-        for code, c in self.countries.items():
-            if set(c.swap_price) != set(self.package_types):
-                raise ValueError(f"{code}: swap_price phải đủ các package_types")
         providers = [p for c in self.countries.values() for p in c.payment_providers]
         if len(providers) != len(set(providers)):
             raise ValueError("payment provider trùng giữa các nước")
+        promo_ids = [p.id for c in self.countries.values() for p in c.pricing.promotions]
+        if len(promo_ids) != len(set(promo_ids)):
+            raise ValueError("promotion id trùng")
         return self
+
+    def package_types_of(self, country: str) -> list[str]:
+        return list(self.countries[country].pricing.packages)
 
     def country_of_provider(self, provider: str) -> str:
         for code, c in self.countries.items():
@@ -215,4 +255,3 @@ def load_knowledge(directory: Path = KNOWLEDGE_DIR) -> Knowledge:
 @lru_cache(maxsize=1)
 def default_knowledge() -> Knowledge:
     return load_knowledge()
-

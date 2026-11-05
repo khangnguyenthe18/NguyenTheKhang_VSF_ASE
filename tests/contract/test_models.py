@@ -46,4 +46,3 @@ def test_ground_truth_never_unknown() -> None:
         {**base, "category": "SYSTEM", "scenario_start": datetime(2026, 1, 1, tzinfo=UTC)}
     )
     assert row.category is not None
-

@@ -28,4 +28,3 @@ def hash_user_id(raw: str, salt: str = "ase") -> str:
 
 def scenario_instance_id(scenario: str, index: int) -> str:
     return f"SCN-{scenario}-{index:03d}"
-

@@ -65,6 +65,12 @@ Rule/detector dùng `default_category`. `ground_truth.csv` thì luôn ghi **nhó
 1. Phiên `STEP_TIMEOUT` (im lặng, xem mục 8).
 2. Một tỷ lệ nhỏ phiên lỗi bị bỏ `error_code` (`error_code=None`, event vẫn có `status` FAILED/TIMEOUT), chỉ còn dấu hiệu ở telemetry, latency, payment hoặc phân bố theo cụm. Tỷ lệ cấu hình trong `profiles.yaml` (`missing_error_code_rate`, mặc định đề xuất **10% của số phiên lỗi**, không phải 10% tổng giao dịch; tổng tỷ lệ lỗi nền vẫn là 3–5%). Chỉ áp cho scenario còn dấu vết gián tiếp để suy ra nhóm thật.
 
+**Bảng giá và gói thuê (chính sách thật, `knowledge/countries.yaml` → `pricing`):**
+- Phí đổi /pin/lần: VN 9.000 VND · PH 35 PHP · ID 6.000 IDR. Gói `RENT_1`, `RENT_2` (mọi nước), `FLEET` (vận doanh Green SM, **chỉ VN**). Không sinh user pin mua đứt (không dùng được dịch vụ đổi pin).
+- `profiles.yaml` có `pricing_mode`, mặc định **`standard_fee`**: `payments.amount = swap_fee × số pin của gói` (`PricingSpec.standard_swap_amount`), **bỏ qua ưu đãi miễn phí** để bước 5 luôn có giao dịch tiền. `promo` (áp `promotions`, 20 lần miễn phí/tháng…) là tuỳ chọn sau.
+- `PAY_WRONG_AMOUNT` = `amount` lệch `standard_swap_amount` của đúng nước/gói.
+- `ELIG_QUOTA_EXCEEDED` vẫn là lỗi mock BIZ. Chính sách thật khi vượt 20 lần/tháng là **tính phí**, không từ chối; đừng sinh scenario dựa trên quota 20 lần.
+
 **Quy ước `split` trong `ground_truth.csv`:**
 | Profile | Quy ước |
 |---|---|

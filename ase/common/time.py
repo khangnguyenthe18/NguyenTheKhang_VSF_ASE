@@ -35,4 +35,3 @@ def format_local(dt: datetime, timezone: str) -> str:
     """`HH:mm:ss dd/MM/yyyy (GMT+x)` theo giờ địa phương của trạm."""
     local = to_local(dt, timezone)
     return f"{local:%H:%M:%S %d/%m/%Y} ({format_offset(local)})"
-

@@ -83,6 +83,30 @@ def test_countries() -> None:
     assert abs(sum(x.traffic_weight for x in c.countries.values()) - 1.0) < 1e-9
     assert c.countries["ID"].timezones == ["Asia/Jakarta", "Asia/Makassar"]
     assert c.country_of_provider("PH_WALLET_1") == "PH"
+    fees = {code: x.pricing.swap_fee for code, x in c.countries.items()}
+    assert fees == {"VN": 9000, "PH": 35, "ID": 6000}
+    assert [code for code in c.countries if "FLEET" in c.package_types_of(code)] == ["VN"]
+    vn = c.countries["VN"].pricing
+    assert vn.packages["RENT_2"].batteries == 2
+    assert vn.standard_swap_amount("RENT_2") == 18000
+    assert vn.promotions[1].from_ is not None
+
+
+def test_promotion_unknown_package_rejected(tmp_path: Path) -> None:
+    import shutil
+
+    from ase.knowledge.loader import KNOWLEDGE_DIR
+
+    for f in KNOWLEDGE_DIR.glob("*.yaml"):
+        shutil.copy(f, tmp_path / f.name)
+    (tmp_path / "countries.yaml").write_text(
+        (KNOWLEDGE_DIR / "countries.yaml")
+        .read_text(encoding="utf-8")
+        .replace("packages: [FLEET]", "packages: [NO_SUCH_PKG]"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError):
+        load_knowledge(tmp_path)
 
 
 def test_duplicate_code_rejected() -> None:

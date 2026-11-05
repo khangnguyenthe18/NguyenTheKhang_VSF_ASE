@@ -83,4 +83,3 @@ async def test_jsonl_roundtrip_keeps_order_and_clock_monotonic(tmp_path: Path) -
         last = now
     assert seen == ["e1", "e2", "e2", "e3"]  # giữ nguyên thứ tự dòng
     assert clock.now() == T0 + timedelta(seconds=60)
-
