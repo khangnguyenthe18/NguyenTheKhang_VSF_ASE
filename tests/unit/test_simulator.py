@@ -14,7 +14,7 @@ from ase.common.models import CabinetTelemetry, Category, Severity, Step, SwapEv
 from ase.common.time import to_local
 from ase.knowledge.loader import default_knowledge
 from ase.simulator.checks import SimulationCheckError, check_eval_thresholds, check_invariants
-from ase.simulator.disorder import apply_disorder
+from ase.simulator.disorder import apply_disorder, wait_starts
 from ase.simulator.entities import World
 from ase.simulator.generator import generate, ordered_events, simulate
 from ase.simulator.ground_truth import build_row
@@ -499,23 +499,32 @@ def test_disorder_preserves_sessions_and_bounds_late_delay(
     dev_full: tuple[World, list[SessionResult], list[CabinetTelemetry]],
 ) -> None:
     _, results, _ = dev_full
+    sm = K.state_machine
     ordered = ordered_events(results)
-    disordered = apply_disorder(ordered, seed=1042)
+    disordered = apply_disorder(ordered, seed=1042, state_machine=sm)
     assert len(disordered) > len(ordered)
     assert {e.session_id for e in disordered} == {e.session_id for e in ordered}
     assert {e.event_id for e in disordered} == {e.event_id for e in ordered}
     assert any(a.occurred_at > b.occurred_at for a, b in itertools.pairwise(disordered))
 
-    # Không có event nào bị trễ quá 8 giây so với SimClock (nhỏ hơn SLA tối thiểu 10 giây)
-    max_ts: datetime | None = None
+    # Replay theo SimClock: trễ tối đa 8s, và không event nào của phiên bình thường đến sau SLA
+    # của bước (tính từ event cuối của bước trước), tức tracker không thể báo nhầm STEP_TIMEOUT.
+    normal = {r.session.session_id for r in results if r.label is None}
+    starts = wait_starts(ordered, sm)
+    clock: datetime | None = None
     max_lag_s = 0.0
+    breaches: list[str] = []
     for ev in disordered:
-        if max_ts is not None and ev.occurred_at < max_ts:
-            lag = (max_ts - ev.occurred_at).total_seconds()
-            max_lag_s = max(max_lag_s, lag)
-        if max_ts is None or ev.occurred_at > max_ts:
-            max_ts = ev.occurred_at
+        if clock is None or ev.occurred_at > clock:
+            clock = ev.occurred_at
+        max_lag_s = max(max_lag_s, (clock - ev.occurred_at).total_seconds())
+        sla = sm.sla(ev.step)
+        start = starts.get(ev.event_id)
+        if ev.session_id in normal and sla is not None and start is not None:
+            if (clock - start).total_seconds() > sla:
+                breaches.append(ev.event_id)
     assert 0.5 <= max_lag_s <= 8.0
+    assert breaches == []
 
 
 async def test_generate_smoke_outputs_determinism_and_replay(tmp_path: Path) -> None:

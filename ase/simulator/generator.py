@@ -188,7 +188,9 @@ async def generate(
     )
     await asyncio.to_thread(out_dir.mkdir, parents=True, exist_ok=True)
 
-    stream_events = apply_disorder(ordered_events(results), profile.seed)
+    stream_events = apply_disorder(
+        ordered_events(results), profile.seed, state_machine=knowledge.state_machine
+    )
     gt_rows: list[GroundTruthRow] = [build_row(r, profile.split) for r in results]
     check_invariants(
         profile_name=profile_name,
