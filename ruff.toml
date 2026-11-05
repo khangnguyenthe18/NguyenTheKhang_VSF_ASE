@@ -3,5 +3,7 @@ line-length = 100
 
 [lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "DTZ", "RUF"]
+# Tài liệu tiếng Việt dùng dấu gạch ngang dài (–), không coi là ký tự gây nhầm lẫn.
+ignore = ["RUF001", "RUF002", "RUF003"]
 # DTZ: cấm datetime naive / datetime.now() không tz (ràng buộc CLAUDE.md §3.9)
 

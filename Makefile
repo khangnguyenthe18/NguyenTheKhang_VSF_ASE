@@ -1,20 +1,21 @@
 PROFILE ?= smoke
 UV ?= uv
+UV_RUN ?= $(UV) run --no-sync
 
 .PHONY: check lint type test sim
 
 check: lint type test
 
 lint:
-	$(UV) run ruff check .
-	$(UV) run ruff format --check .
+	$(UV_RUN) ruff check .
+	$(UV_RUN) ruff format --check .
 
 type:
-	$(UV) run mypy
+	$(UV_RUN) mypy
 
 test:
-	$(UV) run pytest -q
+	$(UV_RUN) pytest -q
 
 sim:
-	$(UV) run python -m ase.simulator --profile $(PROFILE)
+	$(UV_RUN) python -m ase.simulator --profile $(PROFILE)
 

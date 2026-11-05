@@ -1,0 +1,90 @@
+# Profile quy mô + tham số chung của simulator (MOCK_PLAN §6, CLAUDE.md §10).
+# Mọi seed/ngày bắt đầu cố định ở đây: simulator không đọc đồng hồ thật (CLAUDE.md §3.9).
+# `eval` chỉ có cấu hình (chạy thật ở Sprint 1); `test_seed` ≠ `seed` để tập test không trùng tập dev.
+
+common:
+  cabinets_per_station: [2, 4]
+  slots_per_cabinet: 12
+  battery_lots: 6
+  app_versions: ["3.1.0", "3.1.5", "3.2.0", "3.2.1"]
+  package_mix: {RENT_1: 0.60, RENT_2: 0.25, FLEET: 0.15}   # chỉ giữ gói có ở nước đó rồi chuẩn hoá
+  users_per_station: 150
+  debt_user_share: 0.02          # user nợ cước (chỉ dùng cho ELIG_DEBT)
+  expired_user_share: 0.02       # user hết hạn gói (chỉ dùng cho ELIG_PACKAGE_EXPIRED)
+  pricing_mode: standard_fee     # `promo` chưa hỗ trợ (MOCK_PLAN §3a)
+
+  # Traffic theo GIỜ ĐỊA PHƯƠNG của trạm.
+  peak_hours_local: [[7, 9], [17, 19]]    # [start, end) giờ
+  peak_weight: 5.0
+  night_hours_local: [0, 6]               # [start, end)
+  night_weight: 0.2
+
+  # Lỗi nền 3–5% tổng phiên, chủ yếu USER.
+  background_fail_rate: 0.04
+  # Tỷ lệ bỏ error_code trên các phiên lỗi nền có `omit_code_allowed` (MOCK_PLAN §3a):
+  # chỉ áp cho mã còn dấu vết gián tiếp (telemetry) để suy ra nhóm thật.
+  missing_error_code_rate: 0.10
+
+  step_seconds:
+    1_open_app: [2, 8]
+    2_select_service: [2, 8]
+    3_scan_qr: [2, 6]
+    4_check_eligibility: [1, 4]
+    5_payment: [5, 25]
+    6_return_battery: [15, 60]
+    7_receive_battery: [10, 50]
+  latency_median_ms:
+    1_open_app: 120
+    2_select_service: 150
+    3_scan_qr: 180
+    4_check_eligibility: 120
+    5_payment: 600
+    6_return_battery: 400
+    7_receive_battery: 450
+  ambient_temp_c: [28.0, 36.0]
+
+  # Lỗi nền: mã phải có trong error_catalog.yaml (generator kiểm tra). Trọng số tương đối.
+  background_failures:
+    # USER (chiếm đa số)
+    - {code: QR_INVALID, weight: 20}
+    - {code: QR_WRONG_STATION, weight: 8}
+    - {code: TOKEN_EXPIRED, weight: 12}
+    - {code: PAY_DECLINED, weight: 18}
+    - {code: PAY_USER_CANCEL, weight: 6}
+    - {code: USR_RETURN_TIMEOUT, weight: 6, status: TIMEOUT}
+    - {code: USR_NOT_COLLECTED, weight: 2, status: TIMEOUT}
+    # BUSINESS
+    - {code: ELIG_DEBT, weight: 5}
+    - {code: ELIG_PACKAGE_EXPIRED, weight: 5}
+    - {code: ACCOUNT_LOCKED, weight: 2}
+    # HARDWARE / SYSTEM / PAYMENT / BATTERY_QUALITY rải rác
+    - {code: SLOT_SENSOR_FAIL, weight: 5, omit_code_allowed: true}
+    - {code: CABINET_NO_ACK, weight: 4, omit_code_allowed: true}
+    - {code: ELIG_SERVICE_ERROR, weight: 3}
+    - {code: PAY_GATEWAY_TIMEOUT, weight: 4}
+    - {code: BAT_LOW_SOC, weight: 4, omit_code_allowed: true}
+
+profiles:
+  smoke:
+    seed: 42
+    start_date: 2026-10-26
+    days: 1
+    sessions_per_day: 300
+    stations: {VN: 2}
+    split: {baseline_days: 0, after: smoke}
+  dev:
+    seed: 1042
+    start_date: 2026-10-19
+    days: 14
+    sessions_per_day: 1000
+    stations: {VN: 2, PH: 1, ID: 2}    # ID: WIB + WITA (xoay vòng timezone)
+    split: {baseline_days: 7, after: dev}
+  eval:
+    seed: 2042
+    test_seed: 9042
+    start_date: 2026-10-05
+    days: 30                            # 20 baseline + 10 test
+    sessions_per_day: 1500
+    stations: {VN: 7, PH: 2, ID: 2}
+    split: {baseline_days: 20, after: test}
+

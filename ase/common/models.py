@@ -154,6 +154,7 @@ class Battery(_Table):
 
 class User(_Table):
     user_id: str  # hash
+    country: str  # cột thêm: nước của user (master data có country)
     package_type: str
     package_expiry: datetime
     debt_flag: bool
@@ -168,6 +169,8 @@ class SwapSession(_Table):
     cabinet_id: str | None = None
     slot_in: str | None = None
     slot_out: str | None = None
+    battery_in_id: str | None = None  # cột thêm: pin khách trả (join `batteries` trực tiếp)
+    battery_out_id: str | None = None  # cột thêm: pin xuất
     app_version: str
     payment_provider: str | None = None
     final_status: str
