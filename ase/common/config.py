@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +22,67 @@ class Settings(BaseSettings):
     llm_run_budget_usd: float = Field(default=2, ge=0)
     llm_max_output_tokens: int = 800
     allow_external_llm_on_masked: bool = True
+
+    # Notifier settings (NOTIFIER_PLAN §7)
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_tls: Literal["none", "starttls", "ssl"] = "none"
+    smtp_user: str | None = None
+    smtp_password: SecretStr | None = None
+    mail_from: str | None = "ase-alerts@ase.local"
+    mail_to: str | None = "ops@ase.local"
+    teams_url: str = "http://localhost:8000"
+    feedback_base_url: str = "http://localhost:8000"
+    notifier_db: Path = ROOT / "data" / "notifier.sqlite"
+    preview_dir: Path = ROOT / "data" / "outbox_preview"
+    notify_mode: Literal["dry_run", "live"] = "live"
+    max_alerts_per_run: int = Field(default=20, ge=1)
+
+    @field_validator("smtp_user", mode="before")
+    @classmethod
+    def _empty_user_to_none(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("smtp_password", mode="before")
+    @classmethod
+    def _empty_secret_to_none(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        if isinstance(v, SecretStr) and not v.get_secret_value().strip():
+            return None
+        return v
+
+    @field_validator("smtp_port", mode="before")
+    @classmethod
+    def _empty_port_to_default(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return 1025
+        return v
+
+    @field_validator("smtp_host", "smtp_tls", "mail_from", "mail_to", "notify_mode", mode="before")
+    @classmethod
+    def _empty_str_to_default(cls, v: object, info: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            defaults = {
+                "smtp_host": "localhost",
+                "smtp_tls": "none",
+                "mail_from": "ase-alerts@ase.local",
+                "mail_to": "ops@ase.local",
+                "notify_mode": "live",
+            }
+            field_name = getattr(info, "field_name", "")
+            return defaults.get(field_name, v)
+        return v
+
+    @model_validator(mode="after")
+    def _derive_defaults(self) -> Settings:
+        if "notifier_db" not in self.model_fields_set:
+            self.notifier_db = self.data_dir / "notifier.sqlite"
+        if "preview_dir" not in self.model_fields_set:
+            self.preview_dir = self.data_dir / "outbox_preview"
+        return self
 
     def profile_dir(self, profile: str) -> Path:
         return self.data_dir / profile

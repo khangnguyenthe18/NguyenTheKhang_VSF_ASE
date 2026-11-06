@@ -189,7 +189,7 @@ Nguyên tắc: **tinh gọn, mọi thứ chạy bằng một lệnh trên laptop
 - **polars + pyarrow** (Parquet), **orjson** (JSONL)
 - **SQLite** qua `aiosqlite`: incidents, outbox, feedback, cache kết quả LLM
 - Dedup `event_id` và timer state machine: **in-memory** khi replay JSONL
-- Mail: **aiosmtplib → MailHog** (Docker, container duy nhất), template **Jinja2**
+- Mail: **aiosmtplib → Mailpit** (Docker, container duy nhất) khi dev/demo; dự án thật trỏ sang SMTP công ty chỉ bằng `.env` (host/port/TLS/auth), template **Jinja2**; Teams: **mock Teams**
 - Đánh giá: **scikit-learn** (`classification_report`, `confusion_matrix`)
 - Log: **structlog** (JSON) kèm `session_id`/`incident_id`
 - **Makefile**: `make sim`, `make e2e`, `make eval`, `make llm-cost`, `make check`
@@ -208,7 +208,7 @@ Nguyên tắc: **tinh gọn, mọi thứ chạy bằng một lệnh trên laptop
 - `aiokafka` + Redpanda, Redis (chỉ khi tích hợp đối tác và chủ dự án yêu cầu)
 
 **Không dùng:** LangChain / LangGraph / LlamaIndex (khó kiểm soát token, khó deterministic, thừa với luồng single-shot); vector DB (pgvector, Chroma); Postgres/Redis từ đầu.
-- Mail: **MailHog** (SMTP giả lập + web UI). **Không có quyền Graph API.** `GraphMailer` chỉ là implementation tuỳ chọn sau interface `Notifier`, không bắt buộc.
+- Mail: aiosmtplib → **Mailpit** (Docker, container duy nhất) khi dev/demo; dự án thật trỏ sang SMTP công ty chỉ bằng `.env` (host/port/TLS/auth). Teams: mock Teams. **Không có quyền Graph API.** `GraphMailer` chỉ là implementation tuỳ chọn sau interface `Notifier`, không bắt buộc.
 - Teams: **không có quyền Teams Workflows.** Dùng **mock Teams**: endpoint FastAPI nhận Adaptive Card JSON + trang web hiển thị card giống Teams, nút feedback hoạt động thật. `TeamsWebhookNotifier` tuỳ chọn.
 - LLM: đặt sau interface `LLMClient` (structured output + tool use), chọn bằng env `ASE_LLM_PROVIDER` / `ASE_LLM_MODEL`; mỗi provider một adapter, phần còn lại của code không biết provider.
   - **Provider chính cho toàn dự án (mock và masked): `anthropic` + Claude Haiku 5.5** (`claude-haiku-5-5`). Chi phí được kiểm soát theo mục 17.
@@ -732,7 +732,7 @@ Quy tắc:
 - Dữ liệu masked: được gửi lên Haiku (cờ `ASE_ALLOW_EXTERNAL_LLM_ON_MASKED=true`); chủ dự án sẽ báo nếu không được phép.
 - Chưa có schema dữ liệu masked → field ablation T0–T3 + adapter cấu hình được.
 - Đã có người gán nhãn mẫu dữ liệu masked.
-- Không có quyền Graph API / Teams → MailHog + mock Teams.
+- Mail: aiosmtplib → **Mailpit** (Docker, container duy nhất) khi dev/demo; dự án thật trỏ sang SMTP công ty chỉ bằng `.env` (host/port/TLS/auth). Teams: mock Teams.
 - Phần đối tác: chỉ là điểm cộng, chỉ làm khi chủ dự án yêu cầu. Không sinh `ase.logs.raw` / `app_logs`; dùng `latency_ms` trên event.
 - Quốc gia: **sinh dữ liệu 3 nước đã triển khai** VN, PH, ID (mục 10, "Phạm vi quốc gia"); `smoke` chỉ VN. **Không sinh IN, TH, MY** (mới công bố kế hoạch); thêm sau qua `countries.yaml`. OPS: một đội trung tâm, alert tiếng Việt cho mọi nước, routing theo category.
 

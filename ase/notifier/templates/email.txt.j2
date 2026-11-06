@@ -1,0 +1,24 @@
+Dear Team {{ team }},
+
+Hệ thống kiểm tra có giao dịch lỗi có thể liên quan đến {{ category_label }}, cần kiểm tra khắc phục.
+{% if revision > 1 %}
+[Cập nhật lần #{{ revision }}]
+{% endif %}
+• Mã giao dịch : {{ session_id }}
+• Thời gian    : {{ time_display }}
+• Quốc gia     : {{ country_display }}
+• Trạm / Tủ    : {{ station_display }}
+• Bước lỗi     : {{ step }} – {{ step_description }}
+• Mã lỗi       : {{ error_code_display }}
+• Phân loại AI : {{ category_code }} ({{ category_label }}) – {{ severity }} – Độ tin cậy {{ confidence_display }}{% if needs_human_review %} [Cần OPS xem xét]{% endif %}
+• Phạm vi      : {{ n_sessions }} giao dịch cùng lỗi tại {{ n_stations }} trạm trong {{ window_minutes }} phút ({{ incident_id }})
+
+Nguyên nhân khả nghi (AI gợi ý, cần xác thực): {{ probable_cause }}
+Bằng chứng: {{ evidence_display }}
+Đề xuất xử lý: {{ suggested_actions_display }} (Runbook {{ runbook_display }})
+
+[Xác nhận đúng]: {{ confirm_url }}
+[Sai phân loại]: {{ wrong_category_url }}
+[Đã xử lý]: {{ resolved_url }}
+-- AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.
+

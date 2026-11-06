@@ -87,6 +87,37 @@ class TriageResult(BaseModel):
     needs_human_review: bool = True
 
 
+class Incident(BaseModel):
+    """Contract giữa detector và notifier (NOTIFIER_PLAN §3.2)."""
+
+    incident_id: str
+    revision: int = Field(default=1, ge=1)
+    category: Category
+    severity: Severity
+    error_code: str | None = None
+    step: Step
+    station_id: str
+    cabinet_id: str | None = None
+    slot_id: str | None = None
+    country: str
+    timezone: str  # IANA của trạm đại diện
+    countries: list[str] = Field(default_factory=list)
+    session_ids: list[str] = Field(min_length=1)
+    first_seen_at: datetime  # UTC, tz-aware
+    last_seen_at: datetime  # UTC, tz-aware
+    n_sessions: int = Field(ge=1)
+    n_stations: int = Field(ge=1)
+    window_minutes: int = Field(ge=0)
+    confidence: float = Field(ge=0, le=1)
+    probable_cause: str = Field(max_length=500)
+    evidence: list[str] = Field(default_factory=list, max_length=5)
+    suggested_actions: list[str] = Field(default_factory=list, max_length=5)
+    runbook_ids: list[str] = Field(default_factory=list)
+    needs_human_review: bool = False
+
+    _aware = field_validator("first_seen_at", "last_seen_at")(_require_aware)
+
+
 class OpenPoint(BaseModel):
     id: str  # ổn định qua các kỳ
     group: Literal["OPERATION", "AI_SYSTEM"]
