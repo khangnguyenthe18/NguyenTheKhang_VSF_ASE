@@ -1,0 +1,18 @@
+{% extends "base.html.j2" %}
+{% block title %}Incidents — ASE BSS NOC{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-header">
+    <h2>Danh sách Incident (Detector &amp; Triage Agent)</h2>
+  </div>
+  <div class="empty-box">
+    <h3>{{ data.message }}</h3>
+    <p>
+      Trang này để chỗ sẵn cho đầu ra của <code>ase/detector/</code> và <code>ase/triage/</code>.
+      Khi detector ghi incident ra file hoặc SQLite, danh sách incident sẽ hiển thị tại đây.
+      Dashboard giữ nguyên tắc <strong>read-only</strong>, không tự tạo incident.
+    </p>
+  </div>
+</section>
+{% endblock %}
+

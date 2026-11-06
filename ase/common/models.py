@@ -149,6 +149,8 @@ class Station(_Table):
     timezone: str  # IANA
     model_gen: str
     install_date: datetime
+    lat: float = 0.0
+    lon: float = 0.0
 
     _aware = field_validator("install_date")(_require_aware)
 

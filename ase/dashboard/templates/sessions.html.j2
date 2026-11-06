@@ -1,0 +1,245 @@
+{% extends "base.html.j2" %}
+{% block title %}Giao dịch đổi pin — ASE BSS NOC{% endblock %}
+{% block content %}
+{% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+
+<section class="panel">
+  <form method="get" action="/dashboard/sessions" class="sub-filter-bar">
+    <input type="hidden" name="profile" value="{{ meta.profile }}">
+    {% if meta.country %}<input type="hidden" name="country" value="{{ meta.country }}">{% endif %}
+    <input type="hidden" name="as_of" value="{{ meta.as_of.isoformat() }}">
+    <label>
+      <span>Cửa sổ phân tích:</span>
+      <select name="window_hours">
+        {% for wh, lbl in [(6, "6 giờ"), (24, "24 giờ"), (72, "3 ngày"), (168, "7 ngày"), (336, "14 ngày")] %}
+        <option value="{{ wh }}" {% if data.window_hours == wh %}selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>Trạng thái phiên:</span>
+      <select name="status">
+        <option value="">Tất cả</option>
+        <option value="COMPLETED" {% if data.filter_status == "COMPLETED" %}selected{% endif %}>COMPLETED</option>
+        <option value="FAILED" {% if data.filter_status == "FAILED" %}selected{% endif %}>FAILED</option>
+      </select>
+    </label>
+    <label>
+      <span>Trạm:</span>
+      <select name="station_id">
+        <option value="">Tất cả trạm</option>
+        {% for st_id in data.available_stations %}
+        <option value="{{ st_id }}" {% if data.filter_station_id == st_id %}selected{% endif %}>{{ st_id }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>Bước cuối:</span>
+      <select name="step">
+        <option value="">Tất cả bước</option>
+        {% for s_val, s_lbl in step_choices %}
+        <option value="{{ s_val }}" {% if data.filter_step and data.filter_step.value == s_val %}selected{% endif %}>{{ s_lbl }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn-primary">Lọc phiên</button>
+  </form>
+</section>
+
+<div class="grid-2col">
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Phễu 7 bước hành trình đổi pin ({{ data.window_hours }}h gần nhất)</h2>
+    </div>
+    <div id="chart-funnel" class="chart-box"></div>
+    <div class="table-wrap mt-12">
+      <table class="data-table data-table-compact">
+        <thead>
+          <tr>
+            <th>Bước</th>
+            <th>Service</th>
+            <th>Số phiên tới bước</th>
+            <th>OK</th>
+            <th>FAILED / TIMEOUT</th>
+            <th>Rơi giữa bước</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in data.funnel %}
+          <tr>
+            <td><strong>{{ f.step_label }}</strong></td>
+            <td>{{ f.service }}</td>
+            <td>{{ f.reached_count }}</td>
+            <td>{{ f.ok_count }}</td>
+            <td>{{ f.failed_count }}</td>
+            <td>{{ f.drop_count }} ({{ "%.2f"|format(f.drop_rate_pct) }}%)</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Latency p50 / p95 theo bước &amp; Ngưỡng SLA</h2>
+      <span class="note-text">Đọc từ <code>state_machine.yaml</code></span>
+    </div>
+    <div id="chart-step-latency" class="chart-box"></div>
+    <div class="table-wrap mt-12">
+      <table class="data-table data-table-compact">
+        <thead>
+          <tr>
+            <th>Bước</th>
+            <th>Số event</th>
+            <th>p50 (ms)</th>
+            <th>p95 (ms)</th>
+            <th>SLA (ms)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for l in data.step_latency %}
+          <tr>
+            <td>{{ l.step_label }}</td>
+            <td>{{ l.count }}</td>
+            <td>{{ l.p50_ms if l.p50_ms is not none else "—" }}</td>
+            <td>{{ l.p95_ms if l.p95_ms is not none else "—" }}</td>
+            <td><code>{{ l.sla_ms if l.sla_ms is not none else "Không giới hạn" }}</code></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Ma trận Bước × Mã lỗi (Heatmap số event FAILED / TIMEOUT)</h2>
+    <span class="note-text">Phiên có <code>error_code=None</code> hiện là "không có mã"</span>
+  </div>
+  <div id="chart-error-matrix" class="chart-box-tall"></div>
+  {% if data.error_matrix.error_codes %}
+  <div class="table-wrap mt-12">
+    <table class="data-table data-table-compact">
+      <thead>
+        <tr>
+          <th>Bước \ Mã lỗi</th>
+          {% for code in data.error_matrix.error_codes %}
+          <th><code>{{ data.error_matrix.error_labels[code] }}</code></th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for st in data.error_matrix.steps %}
+        <tr>
+          <td><strong>{{ data.error_matrix.step_labels[st.value] }}</strong></td>
+          {% for code in data.error_matrix.error_codes %}
+            {% set ns = namespace(val=0) %}
+            {% for cell in data.error_matrix.cells %}
+              {% if cell.step == st and cell.error_code == code %}
+                {% set ns.val = cell.count %}
+              {% endif %}
+            {% endfor %}
+            <td class="{% if ns.val > 0 %}cell-nonzero{% endif %}">{{ ns.val if ns.val > 0 else "·" }}</td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-box">Không có sự kiện lỗi trong khoảng thời gian đã chọn.</div>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Phiên đang treo quá SLA tại <code>as_of</code> ({{ data.stuck_sessions | length }} phiên, trong đó {{ data.stuck_sessions | selectattr("stale") | list | length }} treo &gt; 1 giờ)</h2>
+    <span class="note-text">Tính từ event cuối của bước liền trước theo SLA trong <code>state_machine.yaml</code></span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Mã phiên</th>
+          <th>Trạm (Nước)</th>
+          <th>Tủ</th>
+          <th>Bước hoàn tất cuối</th>
+          <th>Bước đang treo</th>
+          <th>Bắt đầu chờ (giờ địa phương)</th>
+          <th>Đã chờ / SLA</th>
+          <th>Đã trừ tiền?</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in data.stuck_sessions %}
+        <tr>
+          <td><a href="/dashboard/sessions/{{ s.session_id }}?{{ q_base }}"><strong>{{ s.session_id }}</strong></a></td>
+          <td><a href="/dashboard/stations/{{ s.station_id }}?{{ q_base }}">{{ s.station_id }}</a> ({{ s.country }})</td>
+          <td><code>{{ s.cabinet_id or "—" }}</code></td>
+          <td><code>{{ s.last_completed_step.value if s.last_completed_step else "—" }}</code></td>
+          <td><span class="status-pill status-red">{{ s.stuck_step_label }}</span></td>
+          <td><code>{{ s.wait_started_at_local }}</code></td>
+          <td><strong>{{ "%.0f"|format(s.elapsed_seconds) }}s</strong> / {{ s.sla_seconds }}s{% if s.stale %} <span class="badge">treo &gt; 1 giờ</span>{% endif %}</td>
+          <td>
+            {% if s.payment_captured %}
+              <span class="status-pill status-red">captured=true (P1)</span>
+            {% else %}
+              <span class="badge">captured=false</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8">Không có phiên nào đang treo quá SLA.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Bảng phiên gần nhất ({{ data.recent_sessions | length }} phiên)</h2>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Mã giao dịch</th>
+          <th>Trạm (Nước)</th>
+          <th>Tủ / Khoang (Vào → Ra)</th>
+          <th>App</th>
+          <th>Provider</th>
+          <th>Bước cuối</th>
+          <th>Mã lỗi</th>
+          <th>Bắt đầu (giờ địa phương)</th>
+          <th>Thời lượng</th>
+          <th>Trạng thái</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in data.recent_sessions %}
+        <tr>
+          <td><a href="/dashboard/sessions/{{ r.session_id }}?{{ q_base }}"><strong>{{ r.session_id }}</strong></a></td>
+          <td><a href="/dashboard/stations/{{ r.station_id }}?{{ q_base }}">{{ r.station_id }}</a> ({{ r.country }})</td>
+          <td><code>{{ r.cabinet_id or "—" }}</code> ({{ r.slot_in or "—" }} → {{ r.slot_out or "—" }})</td>
+          <td><code>{{ r.app_version }}</code></td>
+          <td><code>{{ r.payment_provider or "—" }}</code></td>
+          <td>{{ r.last_step.value }}</td>
+          <td><code>{{ r.error_code or ("không có mã" if r.final_status != "COMPLETED" else "—") }}</code></td>
+          <td><code>{{ r.started_at_local }}</code></td>
+          <td>{{ (r.duration_seconds ~ "s") if r.duration_seconds is not none else "—" }}</td>
+          <td>
+            <span class="status-pill {% if r.final_status == 'COMPLETED' %}status-green{% else %}status-red{% endif %}">
+              {{ r.final_status }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+

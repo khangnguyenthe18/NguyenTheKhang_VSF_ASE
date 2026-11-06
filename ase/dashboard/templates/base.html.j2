@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ASE BSS NOC Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/dashboard/dashboard.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body>
+  {% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+  <header class="noc-header">
+    <div class="noc-brand-row">
+      <div class="noc-brand">
+        <span class="noc-dot"></span>
+        <strong>ASE BSS NOC</strong>
+        <span class="noc-subtitle">Trung tâm giám sát vận hành mạng lưới đổi pin VinFast (Read-only)</span>
+      </div>
+      <form id="global-filter-form" class="noc-filters" method="get">
+        <label class="filter-item">
+          <span>Profile</span>
+          <select name="profile" id="filter-profile">
+            {% for p in meta.available_profiles %}
+            <option value="{{ p }}" {% if p == meta.profile %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="filter-item">
+          <span>Quốc gia</span>
+          <select name="country" id="filter-country">
+            <option value="" {% if not meta.country %}selected{% endif %}>Tất cả ({{ meta.available_countries | join(", ") }})</option>
+            {% for c in meta.available_countries %}
+            <option value="{{ c }}" {% if c == meta.country %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <div class="filter-item filter-asof">
+          <span>Thời điểm <code>as_of</code> (UTC)</span>
+          <div class="asof-controls">
+            <input
+              type="range"
+              id="asof-slider"
+              min="{{ meta.min_time.timestamp() | int }}"
+              max="{{ meta.max_time.timestamp() | int }}"
+              step="60"
+              value="{{ meta.as_of.timestamp() | int }}"
+              title="Kéo để chọn thời điểm as_of (UTC)"
+            >
+            <input
+              type="text"
+              name="as_of"
+              id="filter-asof"
+              value="{{ meta.as_of.strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+              size="20"
+            >
+            <button type="submit" class="btn-primary">Áp dụng</button>
+            <button type="button" id="btn-reset-asof" class="btn-secondary" title="Về thời điểm mặc định cuối dữ liệu">Cuối dữ liệu</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <nav class="noc-nav">
+      <a href="/dashboard?{{ q_base }}" class="nav-tab {% if active_tab == 'overview' %}active{% endif %}">Tổng quan</a>
+      <a href="/dashboard/stations?{{ q_base }}" class="nav-tab {% if active_tab == 'stations' %}active{% endif %}">Trạm &amp; Tủ</a>
+      <a href="/dashboard/sessions?{{ q_base }}" class="nav-tab {% if active_tab == 'sessions' %}active{% endif %}">Giao dịch</a>
+      <a href="/dashboard/payments?{{ q_base }}" class="nav-tab {% if active_tab == 'payments' %}active{% endif %}">Thanh toán</a>
+      <a href="/dashboard/batteries?{{ q_base }}" class="nav-tab {% if active_tab == 'batteries' %}active{% endif %}">Pin</a>
+      <a href="/dashboard/alerts?{{ q_base }}" class="nav-tab {% if active_tab == 'alerts' %}active{% endif %}">Cảnh báo</a>
+      <a href="/dashboard/incidents?{{ q_base }}" class="nav-tab {% if active_tab == 'incidents' %}active{% endif %}">Incident</a>
+      <a href="/dashboard/metrics?{{ q_base }}" class="nav-tab {% if active_tab == 'metrics' %}active{% endif %}">Metric SF1–SF9</a>
+      <a href="/dashboard/ground-truth?{{ q_base }}" class="nav-tab nav-mock {% if active_tab == 'ground_truth' %}active{% endif %}">Kiểm chứng (mock)</a>
+      <a href="/" class="nav-tab nav-teams">💬 Mock Microsoft Teams</a>
+    </nav>
+  </header>
+
+  <main class="noc-main">
+    {% if meta.as_of_clamped %}
+    <div class="banner-info">
+      Thời điểm <code>as_of</code> yêu cầu nằm ngoài phạm vi dữ liệu nên đã được kẹp về biên hợp lệ:
+      <code>{{ meta.as_of.isoformat() }}</code>
+      (phạm vi: <code>{{ meta.min_time.isoformat() }}</code> → <code>{{ meta.max_time.isoformat() }}</code>).
+    </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <script type="application/json" id="page-data">{{ data | safe_json }}</script>
+  <script src="/static/dashboard/dashboard.js"></script>
+</body>
+</html>
+

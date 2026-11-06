@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     notify_mode: Literal["dry_run", "live"] = "live"
     max_alerts_per_run: int = Field(default=20, ge=1)
 
+    # Dashboard settings (DASHBOARD_PLAN §6)
+    cabinet_online_window_seconds: int = Field(default=120, ge=1)
+    station_warn_fail_rate: float = Field(default=0.10, ge=0.0, le=1.0)
+    ready_battery_soc_pct: float = Field(default=90.0, ge=0.0, le=100.0)
+    # Tốc độ sạc giả định (%SOC/giờ) để ước lượng SOC hiện tại từ lần đọc telemetry cuối.
+    battery_charge_rate_pct_per_hour: float = Field(default=60.0, ge=0.0)
+
     @field_validator("smtp_user", mode="before")
     @classmethod
     def _empty_user_to_none(cls, v: object) -> object:

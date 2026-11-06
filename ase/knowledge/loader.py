@@ -196,10 +196,18 @@ class PricingSpec(_Strict):
         return self.swap_fee * self.packages[package_type].batteries
 
 
+class CitySpec(_Strict):
+    name: str
+    timezone: str
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
 class CountrySpec(_Strict):
     traffic_weight: float = Field(gt=0)
     currency: str
     timezones: list[str] = Field(min_length=1)
+    cities: list[CitySpec] = Field(default_factory=list)
     payment_providers: list[str] = Field(min_length=1)
     pricing: PricingSpec
 
@@ -207,7 +215,18 @@ class CountrySpec(_Strict):
     def _tz_valid(self) -> CountrySpec:
         for tz in self.timezones:
             ZoneInfo(tz)  # ném ZoneInfoNotFoundError nếu sai
+        if self.cities:
+            city_tzs = {c.timezone for c in self.cities}
+            invalid = city_tzs - set(self.timezones)
+            if invalid:
+                raise ValueError(f"thành phố có timezone không thuộc nước: {sorted(invalid)}")
+            missing = set(self.timezones) - city_tzs
+            if missing:
+                raise ValueError(f"thiếu thành phố cho timezone: {sorted(missing)}")
         return self
+
+    def cities_for_timezone(self, tz: str) -> list[CitySpec]:
+        return [c for c in self.cities if c.timezone == tz]
 
 
 class Countries(_Strict):

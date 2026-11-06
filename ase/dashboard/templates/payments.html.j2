@@ -1,0 +1,111 @@
+{% extends "base.html.j2" %}
+{% block title %}Thanh toán & Đối soát — ASE BSS NOC{% endblock %}
+{% block content %}
+{% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Hiệu năng cổng thanh toán theo Provider &amp; Quốc gia</h2>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Quốc gia</th>
+          <th>Tiền tệ</th>
+          <th>Tổng GD</th>
+          <th>SUCCESS</th>
+          <th>FAILED</th>
+          <th>TIMEOUT</th>
+          <th>DECLINED</th>
+          <th>CANCELLED</th>
+          <th>VOIDED</th>
+          <th>Đang PENDING</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in data.by_provider %}
+        <tr>
+          <td><strong><code>{{ p.payment_provider }}</code></strong></td>
+          <td>{{ p.country }}</td>
+          <td><span class="badge">{{ p.currency }}</span></td>
+          <td>{{ p.total_tx }}</td>
+          <td>{{ p.success_count }} ({{ "%.1f"|format(p.success_rate * 100) }}%)</td>
+          <td>{{ p.failed_count }} ({{ "%.1f"|format(p.failed_rate * 100) }}%)</td>
+          <td class="{% if p.timeout_count > 0 %}cell-nonzero{% endif %}">{{ p.timeout_count }} ({{ "%.1f"|format(p.timeout_rate * 100) }}%)</td>
+          <td>{{ p.declined_count }} ({{ "%.1f"|format(p.declined_rate * 100) }}%)</td>
+          <td>{{ p.cancelled_count }} ({{ "%.1f"|format(p.cancelled_rate * 100) }}%)</td>
+          <td>{{ p.voided_count }} ({{ "%.1f"|format(p.voided_rate * 100) }}%)</td>
+          <td>{{ p.pending_count }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="11">Chưa có giao dịch thanh toán.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="grid-2col">
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Biểu đồ Timeout theo thời gian của từng Provider</h2>
+      <span class="note-text">Phát hiện đợt sập cổng ví điện tử (vd <code>PH_WALLET_1</code>)</span>
+    </div>
+    <div id="chart-provider-timeout" class="chart-box"></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Doanh thu theo ngày địa phương (tách riêng từng Currency)</h2>
+      <span class="note-text">Chỉ tính <code>captured=true</code>, không quy đổi</span>
+    </div>
+    <div id="chart-daily-revenue" class="chart-box"></div>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Đối soát giao dịch rủi ro tiền ({{ data.reconciliation_issues | length }} giao dịch)</h2>
+    <span class="note-text">1) <code>captured=true</code> nhưng phiên lỗi / thiếu bước 6–7 · 2) <code>amount</code> lệch <code>PricingSpec.standard_swap_amount</code></span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Mã giao dịch</th>
+          <th>Payment ID</th>
+          <th>Trạm (Nước)</th>
+          <th>Gói user</th>
+          <th>Provider</th>
+          <th>Số tiền thu / Chuẩn</th>
+          <th>Captured</th>
+          <th>Bước 6/7?</th>
+          <th>Loại rủi ro đối soát</th>
+          <th>Thời gian (địa phương)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in data.reconciliation_issues %}
+        <tr>
+          <td><a href="/dashboard/sessions/{{ r.session_id }}?{{ q_base }}"><strong>{{ r.session_id }}</strong></a></td>
+          <td><code>{{ r.payment_id }}</code></td>
+          <td><a href="/dashboard/stations/{{ r.station_id }}?{{ q_base }}">{{ r.station_id }}</a> ({{ r.country }})</td>
+          <td><code>{{ r.package_type }}</code></td>
+          <td><code>{{ r.payment_provider or "—" }}</code></td>
+          <td><strong>{{ "{:,.0f}".format(r.amount) }}</strong> / {{ "{:,.0f}".format(r.expected_amount) }} {{ r.currency }}</td>
+          <td><span class="status-pill status-red">{{ "true" if r.captured else "false" }}</span></td>
+          <td>{{ "Có" if r.has_step_6_or_7 else "Không" }}</td>
+          <td><span class="status-pill status-red">{{ r.issue_label }}</span></td>
+          <td><code>{{ r.started_at_local }}</code></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10">Không có giao dịch lệch đối soát.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+

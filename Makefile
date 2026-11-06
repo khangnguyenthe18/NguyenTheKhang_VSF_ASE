@@ -3,7 +3,7 @@ PROFILE ?= smoke
 UV ?= $(shell command -v uv 2>/dev/null)
 UV_RUN ?= $(if $(UV),$(UV) run --no-sync,)
 
-.PHONY: check lint type test sim teams notify-demo mail-up mail-down
+.PHONY: check lint type test sim teams dashboard notify-demo mail-up mail-down
 
 check: lint type test
 
@@ -21,6 +21,9 @@ sim:
 	$(UV_RUN) python -m ase.simulator --profile $(PROFILE)
 
 teams:
+	$(UV_RUN) uvicorn ase.notifier.mock_teams.app:app --port 8000
+
+dashboard:
 	$(UV_RUN) uvicorn ase.notifier.mock_teams.app:app --port 8000
 
 mail-up:

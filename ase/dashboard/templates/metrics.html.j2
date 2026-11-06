@@ -1,0 +1,40 @@
+{% extends "base.html.j2" %}
+{% block title %}Metric SF1–SF9 — ASE BSS NOC{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="panel-header">
+    <h2>Chỉ tiêu Đánh giá Hệ thống AI (Success Factors SF1–SF9)</h2>
+    <span class="badge">{{ data.message }}</span>
+  </div>
+  <p class="note-text mb-12">
+    Trang này để chỗ sẵn cho báo cáo của <code>ase/evaluator/</code> (so sánh cấu hình <strong>rule-only</strong> và <strong>rule + LLM</strong>).
+  </p>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Mã</th>
+          <th>Success Factor</th>
+          <th>Chỉ số KPI</th>
+          <th>Ngưỡng đạt</th>
+          <th>Rule-only</th>
+          <th>Rule + LLM</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in data.factors %}
+        <tr>
+          <td><strong><code>{{ f.sf_id }}</code></strong></td>
+          <td>{{ f.name }}</td>
+          <td>{{ f.kpi }}</td>
+          <td><span class="badge">{{ f.target }}</span></td>
+          <td>{{ f.rule_only_value or "Chưa có dữ liệu evaluator" }}</td>
+          <td>{{ f.rule_llm_value or "Chưa có dữ liệu evaluator" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+

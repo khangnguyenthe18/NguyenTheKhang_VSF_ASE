@@ -1,0 +1,227 @@
+{% extends "base.html.j2" %}
+{% block title %}Tổng quan mạng lưới — ASE BSS NOC{% endblock %}
+{% block content %}
+{% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+
+<section class="kpi-grid">
+  <div class="kpi-card">
+    <div class="kpi-label">Trạm / Tủ Online</div>
+    <div class="kpi-value">{{ data.kpi_total.stations_online }}/{{ data.kpi_total.stations_total }} trạm</div>
+    <div class="kpi-sub">{{ data.kpi_total.cabinets_online }}/{{ data.kpi_total.cabinets_total }} tủ có heartbeat &le; 2 phút</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Pin sẵn sàng / Tổng khoang *</div>
+    <div class="kpi-value">{{ data.kpi_total.ready_batteries }}/{{ data.kpi_total.total_slots }}</div>
+    <div class="kpi-sub" title="{{ data.ready_battery_note }}">SOC &ge; 90% (xấp xỉ)</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Lượt đổi hôm nay</div>
+    <div class="kpi-value">{{ data.kpi_total.swaps_today }}</div>
+    <div class="kpi-sub">Theo ngày địa phương từng trạm</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Tỷ lệ thành công hôm nay</div>
+    <div class="kpi-value">
+      {% if data.kpi_total.success_rate_today is not none %}
+        {{ "%.1f"|format(data.kpi_total.success_rate_today * 100) }}%
+      {% else %}
+        —
+      {% endif %}
+    </div>
+    <div class="kpi-sub">{{ data.kpi_total.completed_today }}/{{ data.kpi_total.ended_today }} phiên đã kết thúc</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Thời gian đổi (Trung vị / p95)</div>
+    <div class="kpi-value">
+      {% if data.kpi_total.swap_duration_median_s is not none %}
+        {{ "%.1f"|format(data.kpi_total.swap_duration_median_s) }}s / {{ "%.1f"|format(data.kpi_total.swap_duration_p95_s or 0) }}s
+      {% else %}
+        —
+      {% endif %}
+    </div>
+    <div class="kpi-sub">Phiên COMPLETED hôm nay</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Doanh thu hôm nay (tách tiền tệ)</div>
+    <div class="kpi-value kpi-value-sm">
+      {% if data.kpi_total.revenue_today_by_currency %}
+        {% for curr, amt in data.kpi_total.revenue_today_by_currency.items() %}
+          <div>{{ "{:,.0f}".format(amt) }} <span class="badge">{{ curr }}</span></div>
+        {% endfor %}
+      {% else %}
+        0
+      {% endif %}
+    </div>
+    <div class="kpi-sub">captured=true, không quy đổi</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Alert đang mở (P1 / P2)</div>
+    <div class="kpi-value">
+      <span class="sev-p1">P1: {{ data.kpi_total.open_alerts_p1 }}</span> ·
+      <span class="sev-p2">P2: {{ data.kpi_total.open_alerts_p2 }}</span>
+    </div>
+    <div class="kpi-sub"><a href="/dashboard/alerts?{{ q_base }}">Xem bảng Outbox &amp; Card</a></div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Chỉ số KPI theo từng quốc gia</h2>
+    <span class="note-text">* {{ data.ready_battery_note }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Quốc gia</th>
+          <th>Trạm online</th>
+          <th>Tủ online</th>
+          <th>Pin sẵn sàng / Khoang</th>
+          <th>Lượt đổi hôm nay</th>
+          <th>Tỷ lệ thành công</th>
+          <th>Thời gian đổi (p50 / p95)</th>
+          <th>Doanh thu hôm nay</th>
+          <th>Alert mở (P1 / P2)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in data.kpi_by_country %}
+        <tr>
+          <td><strong>{{ row.country }}</strong></td>
+          <td>{{ row.stations_online }}/{{ row.stations_total }}</td>
+          <td>{{ row.cabinets_online }}/{{ row.cabinets_total }}</td>
+          <td>{{ row.ready_batteries }}/{{ row.total_slots }}</td>
+          <td>{{ row.swaps_today }}</td>
+          <td>
+            {% if row.success_rate_today is not none %}
+              {{ "%.1f"|format(row.success_rate_today * 100) }}%
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if row.swap_duration_median_s is not none %}
+              {{ "%.1f"|format(row.swap_duration_median_s) }}s / {{ "%.1f"|format(row.swap_duration_p95_s or 0) }}s
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if row.revenue_today_by_currency %}
+              {% for curr, amt in row.revenue_today_by_currency.items() %}
+                <span>{{ "{:,.0f}".format(amt) }} {{ curr }}</span>{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            {% else %}0{% endif %}
+          </td>
+          <td>P1: {{ row.open_alerts_p1 }} / P2: {{ row.open_alerts_p2 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="grid-2col">
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Bản đồ mạng lưới trạm đổi pin</h2>
+      <div class="legend-inline">
+        <span class="dot dot-green"></span> Xanh: Online, lỗi thấp
+        <span class="dot dot-yellow"></span> Vàng: Lỗi 1h vượt ngưỡng
+        <span class="dot dot-red"></span> Đỏ: Mất heartbeat / Alert P1
+      </div>
+    </div>
+    <div id="stations-map" class="map-box"></div>
+    <div class="table-wrap mt-12">
+      <table class="data-table data-table-compact">
+        <thead>
+          <tr>
+            <th>Trạm</th>
+            <th>Nước</th>
+            <th>Giờ địa phương tại <code>as_of</code></th>
+            <th>Tủ online</th>
+            <th>Pin sẵn sàng</th>
+            <th>Lỗi 1h</th>
+            <th>Trạng thái</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for st in data.stations_map %}
+          <tr>
+            <td><a href="/dashboard/stations/{{ st.station_id }}?{{ q_base }}"><strong>{{ st.station_id }}</strong></a></td>
+            <td>{{ st.country }}</td>
+            <td><code>{{ st.as_of_local }}</code></td>
+            <td>{{ st.cabinets_online }}/{{ st.cabinets_total }}</td>
+            <td>{{ st.ready_batteries }}/{{ st.total_slots }}</td>
+            <td>{{ st.failed_1h }}/{{ st.swaps_1h }} ({{ "%.1f"|format(st.fail_rate_1h * 100) }}%)</td>
+            <td><span class="status-pill status-{{ st.status_color }}">{{ st.status_color | upper }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Lượt đổi theo khung giờ địa phương (24 giờ gần nhất)</h2>
+      <span class="note-text">Tách phiên OK và phiên lỗi</span>
+    </div>
+    <div id="chart-hourly-swaps" class="chart-box"></div>
+
+    <div class="panel-header mt-16">
+      <h2>Top 5 điểm nóng lỗi trong 24 giờ qua</h2>
+    </div>
+    <div class="hotspots-grid">
+      <div>
+        <h3>Top Trạm lỗi</h3>
+        <table class="data-table data-table-compact">
+          <thead><tr><th>Trạm</th><th>Phiên lỗi</th><th>Tỷ lệ</th></tr></thead>
+          <tbody>
+            {% for item in data.hotspots_24h.top_stations %}
+            <tr>
+              <td><a href="/dashboard/stations/{{ item.entity_id }}?{{ q_base }}">{{ item.entity_id }}</a></td>
+              <td>{{ item.failed_sessions }}/{{ item.total_sessions }}</td>
+              <td>{{ "%.1f"|format(item.fail_rate * 100) }}%</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3">Không có phiên lỗi</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h3>Top Tủ lỗi</h3>
+        <table class="data-table data-table-compact">
+          <thead><tr><th>Tủ</th><th>Phiên lỗi</th><th>Tỷ lệ</th></tr></thead>
+          <tbody>
+            {% for item in data.hotspots_24h.top_cabinets %}
+            <tr>
+              <td><a href="/dashboard/stations/{{ item.station_id }}?{{ q_base }}">{{ item.entity_id }}</a></td>
+              <td>{{ item.failed_sessions }}/{{ item.total_sessions }}</td>
+              <td>{{ "%.1f"|format(item.fail_rate * 100) }}%</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3">Không có phiên lỗi</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h3>Top Khoang lỗi</h3>
+        <table class="data-table data-table-compact">
+          <thead><tr><th>Khoang</th><th>Phiên lỗi</th><th>Tỷ lệ</th></tr></thead>
+          <tbody>
+            {% for item in data.hotspots_24h.top_slots %}
+            <tr>
+              <td><a href="/dashboard/stations/{{ item.station_id }}?{{ q_base }}">{{ item.entity_id }}</a></td>
+              <td>{{ item.failed_sessions }}/{{ item.total_sessions }}</td>
+              <td>{{ "%.1f"|format(item.fail_rate * 100) }}%</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3">Không có phiên lỗi</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+

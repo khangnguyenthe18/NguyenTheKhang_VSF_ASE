@@ -1,0 +1,95 @@
+{% extends "base.html.j2" %}
+{% block title %}Chi tiết trạm {{ data.station.station_id }} — ASE BSS NOC{% endblock %}
+{% block content %}
+{% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+
+<section class="panel">
+  <div class="panel-header">
+    <div>
+      <a href="/dashboard/stations?{{ q_base }}" class="back-link">← Danh sách trạm</a>
+      <h2>Trạm {{ data.station.station_id }} ({{ data.station.country }} · {{ data.station.timezone }} · {{ data.station.timezone_offset }})</h2>
+    </div>
+    <span class="status-pill status-{{ data.station.status_color }}">
+      {{ data.station.cabinets_online }}/{{ data.station.cabinets_total }} tủ online ·
+      Pin sẵn sàng: {{ data.station.ready_batteries }}/{{ data.station.total_slots }}
+    </span>
+  </div>
+  <div class="legend-inline mb-12">
+    <span class="slot-badge slot-ready">Sẵn sàng (SOC &ge; 90%)</span>
+    <span class="slot-badge slot-charging">Đang sạc (SOC &lt; 90%)</span>
+    <span class="slot-badge slot-empty">Trống</span>
+    <span class="slot-badge slot-error">Lỗi cửa / cảm biến / khoang</span>
+    <span class="slot-badge slot-overheat">Quá nhiệt (&gt; 55°C)</span>
+  </div>
+</section>
+
+{% for cab in data.cabinets %}
+<section class="panel">
+  <div class="panel-header">
+    <h3>
+      Tủ <code>{{ cab.cabinet_id }}</code> ({{ cab.model_gen }})
+      {% if cab.online %}
+        <span class="status-pill status-green">ONLINE</span>
+      {% else %}
+        <span class="status-pill status-red">OFFLINE / MẤT HEARTBEAT</span>
+      {% endif %}
+    </h3>
+    <div class="note-text">
+      Heartbeat cuối: <code>{{ cab.last_heartbeat_local or "Chưa có" }}</code> ·
+      Nhiệt độ cực đại 24h: <strong>{{ (cab.max_temp_24h ~ "°C") if cab.max_temp_24h is not none else "—" }}</strong>
+    </div>
+  </div>
+
+  <div class="slot-grid-12">
+    {% for slot in cab.slots %}
+    <div class="slot-cell slot-{{ slot.state_color }}" data-slot="{{ slot.slot_id }}">
+      <div class="slot-header">
+        <strong>Khoang {{ slot.slot_id }}</strong>
+        <span class="slot-state-tag">{{ slot.state_label }}</span>
+      </div>
+      <div class="slot-kv"><span>Cửa (`door_state`):</span> <code>{{ slot.door_state }}</code></div>
+      <div class="slot-kv"><span>Có pin (`battery_detected`):</span> <code>{{ "true" if slot.battery_detected else "false" }}</code></div>
+      <div class="slot-kv"><span>SOC:</span> <strong>{{ (slot.soc ~ "%") if slot.soc is not none else "—" }}</strong></div>
+      <div class="slot-kv"><span>Nhiệt độ:</span> <strong>{{ (slot.temperature ~ "°C") if slot.temperature is not none else "—" }}</strong></div>
+      {% if slot.hw_error_code %}
+      <div class="slot-err">HW: <code>{{ slot.hw_error_code }}</code></div>
+      {% endif %}
+      {% if slot.recent_error_code %}
+      <div class="slot-err">
+        Lỗi: <code>{{ slot.recent_error_code }}</code>
+        {% if slot.recent_error_desc %}({{ slot.recent_error_desc }}){% endif %}
+        {% if slot.failed_24h > 0 %}· {{ slot.failed_24h }} phiên lỗi/24h{% endif %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="hb-timeline-section mt-16">
+    <h4>Dòng thời gian Heartbeat 24 giờ gần nhất (màu đỏ = mất heartbeat / chập chờn)</h4>
+    <div class="hb-strip">
+      {% for b in cab.heartbeat_buckets_24h %}
+      <div
+        class="hb-seg hb-{{ b.status }}"
+        title="{{ b.label_local }}: {{ b.heartbeat_count }}/{{ b.expected_count }} nhịp ({{ b.status }})"
+      ></div>
+      {% endfor %}
+    </div>
+    {% if cab.heartbeat_gaps_24h %}
+    <div class="hb-gaps-note">
+      <strong>Phát hiện {{ cab.heartbeat_gaps_24h | length }} khoảng mất heartbeat (&ge; 120s) trong 24h:</strong>
+      {% for g in cab.heartbeat_gaps_24h[:6] %}
+        <span class="gap-pill">{{ g.start_local }} → {{ g.end_local }} ({{ "%.0f"|format(g.gap_seconds) }}s)</span>
+      {% endfor %}
+      {% if cab.heartbeat_gaps_24h | length > 6 %}
+        <span>… (+{{ (cab.heartbeat_gaps_24h | length) - 6 }} khoảng khác)</span>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="note-text">Đủ nhịp heartbeat (1 phút/lần) trong 24 giờ qua.</div>
+    {% endif %}
+  </div>
+</section>
+{% endfor %}
+{% endblock %}
+

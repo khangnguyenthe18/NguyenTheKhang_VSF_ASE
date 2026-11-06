@@ -1,0 +1,158 @@
+{% extends "base.html.j2" %}
+{% block title %}Chi tiết phiên {{ data.session.session_id }} — ASE BSS NOC{% endblock %}
+{% block content %}
+{% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+
+<section class="panel">
+  <div class="panel-header">
+    <div>
+      <a href="/dashboard/sessions?{{ q_base }}" class="back-link">← Danh sách giao dịch</a>
+      <h2>Chi tiết phiên <code>{{ data.session.session_id }}</code></h2>
+    </div>
+    <span class="status-pill {% if data.session.final_status == 'COMPLETED' %}status-green{% else %}status-red{% endif %}">
+      {{ data.session.final_status }}
+    </span>
+  </div>
+  <div class="meta-grid">
+    <div><strong>Trạm / Nước:</strong> <a href="/dashboard/stations/{{ data.session.station_id }}?{{ q_base }}">{{ data.session.station_id }}</a> ({{ data.session.country }} · <code>{{ data.session.timezone }}</code>)</div>
+    <div><strong>Tủ / Khoang:</strong> <code>{{ data.session.cabinet_id or "—" }}</code> · Vào: <code>{{ data.session.slot_in or "—" }}</code> · Ra: <code>{{ data.session.slot_out or "—" }}</code></div>
+    <div><strong>Pin trả / Pin nhận:</strong> <code>{{ data.session.battery_in_id or "—" }}</code> → <code>{{ data.session.battery_out_id or "—" }}</code></div>
+    <div><strong>User / Gói thuê:</strong> <code>{{ data.session.user_id }}</code> ({{ data.user_package_type or "—" }})</div>
+    <div><strong>App version:</strong> <code>{{ data.session.app_version }}</code></div>
+    <div><strong>Bắt đầu (địa phương):</strong> <code>{{ data.session.started_at_local }}</code></div>
+    <div><strong>Kết thúc (địa phương):</strong> <code>{{ data.session.ended_at_local or "—" }}</code> ({{ (data.session.duration_seconds ~ "s") if data.session.duration_seconds is not none else "—" }})</div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Timeline các sự kiện (Events)</h2>
+    <span class="note-text">Giờ hiển thị theo múi giờ trạm ({{ data.session.timezone }})</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Event ID</th>
+          <th>Bước</th>
+          <th>Service</th>
+          <th>Thời điểm (Giờ địa phương)</th>
+          <th>Latency / SLA</th>
+          <th>Trạng thái</th>
+          <th>Mã lỗi</th>
+          <th>Error Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in data.events %}
+        <tr>
+          <td><code>{{ ev.event_id }}</code></td>
+          <td><strong>{{ ev.step_label }}</strong></td>
+          <td>{{ ev.service }}</td>
+          <td><code>{{ ev.occurred_at_local }}</code></td>
+          <td>
+            {{ (ev.latency_ms ~ " ms") if ev.latency_ms is not none else "—" }}
+            {% if ev.sla_seconds %} / SLA {{ ev.sla_seconds }}s{% endif %}
+          </td>
+          <td>
+            <span class="status-pill {% if ev.status == 'OK' %}status-green{% elif ev.status == 'PENDING' %}status-yellow{% else %}status-red{% endif %}">
+              {{ ev.status }}
+            </span>
+          </td>
+          <td>
+            {% if ev.error_code %}
+              <code>{{ ev.error_code }}</code>
+              {% if ev.error_description %}<div class="note-text">{{ ev.error_description }}</div>{% endif %}
+            {% elif ev.status in ("FAILED", "TIMEOUT") %}
+              <span class="badge">không có mã</span>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>
+            {% if ev.error_message %}
+              <div class="untrusted-box">
+                <span class="untrusted-tag">⚠️ {{ ev.untrusted_badge }}</span>
+                <pre class="untrusted-text">{{ ev.error_message }}</pre>
+              </div>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="grid-2col">
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Thông tin Thanh toán (Payment)</h2>
+    </div>
+    {% if data.payment %}
+    <div class="meta-grid">
+      <div><strong>Payment ID:</strong> <code>{{ data.payment.payment_id }}</code></div>
+      <div><strong>Provider:</strong> <code>{{ data.payment.payment_provider or "—" }}</code></div>
+      <div><strong>Số tiền:</strong> <strong>{{ "{:,.0f}".format(data.payment.amount) }} {{ data.payment.currency }}</strong>
+        {% if data.payment.expected_amount is not none %}
+          (Chuẩn gói: {{ "{:,.0f}".format(data.payment.expected_amount) }} {{ data.payment.currency }})
+        {% endif %}
+        {% if data.payment.amount_mismatch %}
+          <span class="status-pill status-red">LỆCH BẢNG GIÁ</span>
+        {% endif %}
+      </div>
+      <div><strong>Trạng thái:</strong> <code>{{ data.payment.status }}</code></div>
+      <div><strong>Đã trừ tiền (`captured`):</strong>
+        <span class="status-pill {% if data.payment.captured and data.session.final_status != 'COMPLETED' %}status-red{% elif data.payment.captured %}status-green{% else %}status-yellow{% endif %}">
+          {{ "true" if data.payment.captured else "false" }}
+        </span>
+      </div>
+      <div><strong>Callback lúc:</strong> <code>{{ data.payment.callback_at_local or "Chưa có callback" }}</code></div>
+    </div>
+    {% else %}
+    <div class="empty-box">Phiên dừng trước bước 5 nên chưa phát sinh giao dịch thanh toán.</div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-header">
+      <h2>Telemetry Tủ &amp; Khoang liên quan quanh phiên</h2>
+    </div>
+    {% if data.telemetry %}
+    <div class="table-wrap">
+      <table class="data-table data-table-compact">
+        <thead>
+          <tr>
+            <th>Thời gian (địa phương)</th>
+            <th>Khoang</th>
+            <th>Cửa</th>
+            <th>Có pin</th>
+            <th>SOC</th>
+            <th>Nhiệt độ</th>
+            <th>Mã HW</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in data.telemetry %}
+          <tr>
+            <td><code>{{ t.heartbeat_at_local }}</code></td>
+            <td><code>{{ t.slot_id or "(Heartbeat tủ)" }}</code></td>
+            <td><code>{{ t.door_state or "—" }}</code></td>
+            <td><code>{{ "true" if t.battery_detected is sameas true else ("false" if t.battery_detected is sameas false else "—") }}</code></td>
+            <td>{{ (t.soc ~ "%") if t.soc is not none else "—" }}</td>
+            <td>{{ (t.temperature ~ "°C") if t.temperature is not none else "—" }}</td>
+            <td><code>{{ t.hw_error_code or "—" }}</code></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-box">Không có dữ liệu telemetry khoang cho phiên này.</div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
+

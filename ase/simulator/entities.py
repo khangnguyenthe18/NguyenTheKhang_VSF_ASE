@@ -62,18 +62,31 @@ def build_world(profile: ProfileSpec, common: CommonSpec, knowledge: Knowledge) 
     battery_seq = 0
     for country, n_stations in profile.stations.items():
         spec = knowledge.countries.countries[country]
+        tz_city_idx: dict[str, int] = {}
         for n in range(1, n_stations + 1):
             rng = substream(seed, "entities", country, n)
             station_id = f"{country}-ST-{n:03d}"
             tz = spec.timezones[(n - 1) % len(spec.timezones)]  # xoay vòng múi giờ (ID: WIB/WITA)
             model_gen = rng.choice(["G1", "G2"])
             install = start - timedelta(days=rng.randint(120, 600))
+            geo_rng = substream(seed, "geo", station_id)
+            tz_cities = spec.cities_for_timezone(tz)
+            if tz_cities:
+                c_idx = tz_city_idx.get(tz, 0)
+                tz_city_idx[tz] = c_idx + 1
+                city = tz_cities[c_idx % len(tz_cities)]
+                lat = round(city.lat + geo_rng.uniform(-0.02, 0.02), 6)
+                lon = round(city.lon + geo_rng.uniform(-0.02, 0.02), 6)
+            else:
+                lat, lon = 0.0, 0.0
             station = Station(
                 station_id=station_id,
                 country=country,
                 timezone=tz,
                 model_gen=model_gen,
                 install_date=install,
+                lat=lat,
+                lon=lon,
             )
             world.stations.append(station)
             world.station_by_id[station_id] = station

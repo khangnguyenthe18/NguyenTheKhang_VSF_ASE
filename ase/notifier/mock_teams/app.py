@@ -11,9 +11,12 @@ from typing import Literal
 import aiosqlite
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from ase.common.config import Settings, get_settings
 from ase.common.transport import Clock, WallClock
+from ase.dashboard.api import router as dashboard_api_router
+from ase.dashboard.pages import router as dashboard_pages_router
 
 FeedbackAction = Literal["confirm", "wrong_category", "resolved"]
 
@@ -82,10 +85,19 @@ def create_app(
     clock: Clock | None = None,
     settings: Settings | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="ASE Mock Microsoft Teams")
+    app = FastAPI(title="ASE Mock Microsoft Teams & NOC Dashboard")
     app.state.db_path = db_path
     app.state.clock = clock or WallClock()
     app.state.settings = settings
+
+    static_dir = Path(__file__).resolve().parents[2] / "dashboard" / "static"
+    app.mount(
+        "/static/dashboard",
+        StaticFiles(directory=str(static_dir)),
+        name="dashboard-static",
+    )
+    app.include_router(dashboard_api_router)
+    app.include_router(dashboard_pages_router)
 
     def _resolve_db_path() -> Path:
         configured: Path | None = app.state.db_path
@@ -362,6 +374,10 @@ def create_app(
 <body>
   <aside class="sidebar">
     <h1>ASE Mock Teams</h1>
+    <a href="/dashboard" class="ch-link"
+       style="background: #312e81; margin-bottom: 12px; font-weight: 600;">
+      📊 Mở NOC Dashboard →
+    </a>
     {"".join(sidebar_items)}
   </aside>
   <main class="main">

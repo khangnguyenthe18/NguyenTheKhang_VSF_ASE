@@ -13,6 +13,10 @@ countries:
     traffic_weight: 0.70
     currency: VND
     timezones: [Asia/Ho_Chi_Minh]
+    cities:
+      - {name: "Hà Nội", timezone: Asia/Ho_Chi_Minh, lat: 21.0285, lon: 105.8542}
+      - {name: "TP.HCM", timezone: Asia/Ho_Chi_Minh, lat: 10.7769, lon: 106.7009}
+      - {name: "Đà Nẵng", timezone: Asia/Ho_Chi_Minh, lat: 16.0544, lon: 108.2022}
     payment_providers: [VN_WALLET_1, VN_WALLET_2, VN_CARD]
     pricing:
       swap_fee: 9000
@@ -28,6 +32,8 @@ countries:
     traffic_weight: 0.17
     currency: PHP
     timezones: [Asia/Manila]
+    cities:
+      - {name: "Manila", timezone: Asia/Manila, lat: 14.5995, lon: 120.9842}
     payment_providers: [PH_WALLET_1, PH_CARD]
     pricing:
       swap_fee: 35
@@ -40,6 +46,9 @@ countries:
     traffic_weight: 0.13
     currency: IDR
     timezones: [Asia/Jakarta, Asia/Makassar]  # WIB + WITA: 2 múi giờ trong 1 nước
+    cities:
+      - {name: "Jakarta", timezone: Asia/Jakarta, lat: -6.2088, lon: 106.8456}
+      - {name: "Makassar", timezone: Asia/Makassar, lat: -5.1477, lon: 119.4327}
     payment_providers: [ID_WALLET_1, ID_CARD]
     pricing:
       swap_fee: 6000

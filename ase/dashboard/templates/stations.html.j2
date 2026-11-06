@@ -1,0 +1,49 @@
+{% extends "base.html.j2" %}
+{% block title %}Trạm & Tủ đổi pin — ASE BSS NOC{% endblock %}
+{% block content %}
+{% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Danh sách Trạm đổi pin ({{ data.stations | length }} trạm)</h2>
+    <span class="note-text">{{ data.ready_battery_note }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Mã trạm</th>
+          <th>Quốc gia</th>
+          <th>Múi giờ (Offset)</th>
+          <th>Thế hệ</th>
+          <th>Toạ độ</th>
+          <th>Tủ online / Tổng</th>
+          <th>Pin sẵn sàng / Khoang</th>
+          <th>Lượt đổi hôm nay</th>
+          <th>Tỷ lệ lỗi hôm nay</th>
+          <th>Heartbeat cuối (giờ địa phương)</th>
+          <th>Trạng thái</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for st in data.stations %}
+        <tr>
+          <td><a href="/dashboard/stations/{{ st.station_id }}?{{ q_base }}"><strong>{{ st.station_id }}</strong></a></td>
+          <td>{{ st.country }}</td>
+          <td><code>{{ st.timezone }} ({{ st.timezone_offset }})</code></td>
+          <td>{{ st.model_gen }}</td>
+          <td><code>{{ "%.4f"|format(st.lat) }}, {{ "%.4f"|format(st.lon) }}</code></td>
+          <td>{{ st.cabinets_online }}/{{ st.cabinets_total }}</td>
+          <td>{{ st.ready_batteries }}/{{ st.total_slots }}</td>
+          <td>{{ st.swaps_today }}</td>
+          <td>{{ st.failed_today }}/{{ st.swaps_today }} ({{ "%.1f"|format(st.fail_rate_today * 100) }}%)</td>
+          <td><code>{{ st.last_heartbeat_local or "Chưa có" }}</code></td>
+          <td><span class="status-pill status-{{ st.status_color }}">{{ st.status_color | upper }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
