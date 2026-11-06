@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime, time, timedelta
 from typing import Literal
@@ -35,11 +36,16 @@ from ase.common.models import Step
 from ase.common.time import ensure_utc, format_local, format_offset_for, to_local
 from ase.dashboard.data import NotifierSnapshot, ProfileData, extract_session_from_card_json
 from ase.dashboard.models import (
+    AlarmItem,
+    AlarmsResponse,
     AlertsPageResponse,
     AlertStats,
     BatteriesPageResponse,
     CabinetDetail,
+    CabinetTemperatureTimeseriesResponse,
+    CabinetTempPoint,
     CabinetTempRow,
+    CabinetTempSeries,
     CountryKpi,
     DailyRevenueRow,
     DashboardMeta,
@@ -62,6 +68,8 @@ from ase.dashboard.models import (
     PaymentsPageResponse,
     ProviderPaymentStat,
     ProviderTimeoutPoint,
+    ReadyBatteriesTimeseriesResponse,
+    ReadyBatteryPoint,
     ReconciliationRow,
     ScenarioInstanceTimelineItem,
     SessionDetailResponse,
@@ -72,8 +80,10 @@ from ase.dashboard.models import (
     SessionTelemetryItem,
     SlotCell,
     SocHistogramBin,
+    StationChoice,
     StationDetailResponse,
     StationMapItem,
+    StationReadyBatterySeries,
     StationsListResponse,
     StationSummaryRow,
     StepErrorMatrix,
@@ -729,6 +739,19 @@ def _station_rows_and_map(
 
         r_bat = sum(ready_by_cab.get(cid, (0, 0))[0] for cid in st_cabs)
         t_slots = sum(ready_by_cab.get(cid, (0, 0))[1] for cid in st_cabs)
+        ready_pct = round((r_bat / t_slots) * 100.0, 1) if t_slots > 0 else 0.0
+
+        st_tel = data.cabinet_telemetry.filter(
+            pl.col("cabinet_id").is_in(st_cabs)
+            & (pl.col("heartbeat_at") <= as_of)
+            & pl.col("temperature").is_not_null()
+        )
+        max_t_val = st_tel["temperature"].max() if st_tel.height > 0 else None
+        max_temp_c = round(float(max_t_val), 1) if isinstance(max_t_val, (int, float)) else None
+
+        has_hw_err = False
+        if st_tel.height > 0 and "hw_error_code" in st_tel.columns:
+            has_hw_err = bool(st_tel.filter(pl.col("hw_error_code").is_not_null()).height > 0)
 
         sw_today, fl_today = today_by_st.get(sid, (0, 0))
         fr_today = round(fl_today / sw_today, 4) if sw_today > 0 else 0.0
@@ -738,9 +761,11 @@ def _station_rows_and_map(
 
         has_p1 = sid in p1_stations
         if c_online < c_total or has_p1:
-            color: Literal["green", "yellow", "red"] = "red"
+            color: Literal["green", "blue", "yellow", "orange", "red"] = "red"
         elif fr_1h > settings.station_warn_fail_rate:
-            color = "yellow"
+            color = "orange"
+        elif has_hw_err:
+            color = "blue"
         else:
             color = "green"
 
@@ -757,12 +782,14 @@ def _station_rows_and_map(
                 cabinets_online=c_online,
                 ready_batteries=r_bat,
                 total_slots=t_slots,
+                ready_battery_pct=ready_pct,
                 swaps_today=sw_today,
                 failed_today=fl_today,
                 fail_rate_today=fr_today,
                 last_heartbeat_at=last_hb,
                 last_heartbeat_local=last_hb_local,
                 status_color=color,
+                max_temp_c=max_temp_c,
             )
         )
         map_items.append(
@@ -778,6 +805,7 @@ def _station_rows_and_map(
                 cabinets_total=c_total,
                 ready_batteries=r_bat,
                 total_slots=t_slots,
+                ready_battery_pct=ready_pct,
                 swaps_1h=sw_1h,
                 failed_1h=fl_1h,
                 fail_rate_1h=fr_1h,
@@ -786,6 +814,7 @@ def _station_rows_and_map(
                 fail_rate_today=fr_today,
                 has_p1_alert=has_p1,
                 as_of_local=format_local(as_of, tz),
+                max_temp_c=max_temp_c,
             )
         )
 
@@ -857,6 +886,534 @@ def _build_country_kpi(
         revenue_today_by_currency=rev_by_curr,
         open_alerts_p1=alert_counts.get((country_label, "P1"), 0),
         open_alerts_p2=alert_counts.get((country_label, "P2"), 0),
+    )
+
+
+def _feedback_status_line(fb: tuple[str, str] | None) -> str:
+    if not fb:
+        return "Chưa xác nhận"
+    if fb[0] in ("confirm", "wrong_category"):
+        return "Đã xác nhận"
+    if fb[0] == "resolved":
+        return "Đã xử lý"
+    return "Chưa xác nhận"
+
+
+def build_cabinet_temperature_timeseries(
+    data: ProfileData,
+    *,
+    station_id: str | None = None,
+    hours: int = 1,
+    as_of: datetime | None = None,
+    country: str | None = None,
+    settings: Settings | None = None,
+    knowledge: Knowledge | None = None,
+    profiles: list[str] | None = None,
+) -> CabinetTemperatureTimeseriesResponse:
+    """API GET /api/dashboard/timeseries/cabinet-temperature (DASHBOARD_UI_PLAN §3)."""
+    k = knowledge or default_knowledge()
+    meta = _build_meta(data, as_of, country, profiles or [data.profile], k)
+    eff_as_of = meta.as_of
+    hours = max(1, min(24, int(hours)))
+
+    thresholds = k.error_catalog.thresholds
+    warn_t = float(thresholds.temp_warn_1_c)
+    crit_t = float(thresholds.temp_warn_2_c)
+
+    st_df = data.stations.filter(pl.col("country") == country) if country else data.stations
+    if st_df.height == 0:
+        st_df = data.stations
+
+    available_choices = [
+        StationChoice(
+            station_id=str(r["station_id"]),
+            label=f"{r['station_id']} ({r['country']})",
+        )
+        for r in st_df.sort("station_id").iter_rows(named=True)
+    ]
+
+    selected_station = station_id
+    valid_ids = {c.station_id for c in available_choices}
+    if not selected_station or selected_station not in valid_ids:
+        # Mặc định trạm có nhiệt độ cao nhất theo DASHBOARD_UI_PLAN §2.1
+        win_start = eff_as_of - timedelta(hours=hours)
+        cabs_df = data.cabinets.filter(pl.col("station_id").is_in(list(valid_ids)))
+        cab_to_st = {
+            str(r["cabinet_id"]): str(r["station_id"]) for r in cabs_df.iter_rows(named=True)
+        }
+        recent_tel = data.cabinet_telemetry.filter(
+            pl.col("cabinet_id").is_in(list(cab_to_st.keys()))
+            & (pl.col("heartbeat_at") >= win_start)
+            & (pl.col("heartbeat_at") <= eff_as_of)
+            & pl.col("temperature").is_not_null()
+        )
+        best_station: str | None = None
+        best_temp = -999.0
+        for r in recent_tel.iter_rows(named=True):
+            cid = str(r["cabinet_id"])
+            st_of_cab = cab_to_st.get(cid)
+            if st_of_cab and r["temperature"] is not None:
+                t_val = float(r["temperature"])
+                if t_val > best_temp:
+                    best_temp = t_val
+                    best_station = st_of_cab
+        default_choice = available_choices[0].station_id if available_choices else ""
+        selected_station = best_station or default_choice
+
+    st_info = data.stations.filter(pl.col("station_id") == selected_station)
+    tz = str(st_info["timezone"][0]) if st_info.height > 0 else "UTC"
+
+    cabs = data.cabinets.filter(pl.col("station_id") == selected_station).sort("cabinet_id")
+    cab_ids = [str(r["cabinet_id"]) for r in cabs.iter_rows(named=True)]
+
+    start_t = eff_as_of - timedelta(hours=hours)
+    tel_window = data.cabinet_telemetry.filter(
+        pl.col("cabinet_id").is_in(cab_ids)
+        & (pl.col("heartbeat_at") >= start_t)
+        & (pl.col("heartbeat_at") <= eff_as_of)
+        & pl.col("temperature").is_not_null()
+    ).sort("heartbeat_at")
+
+    series_list: list[CabinetTempSeries] = []
+    for cid in cab_ids:
+        cab_tel = tel_window.filter(pl.col("cabinet_id") == cid)
+        n_pts = cab_tel.height
+        if n_pts == 0:
+            series_list.append(CabinetTempSeries(cabinet_id=cid, points=[]))
+            continue
+
+        # Lấy mẫu xuống tối đa khoảng 120 điểm
+        if n_pts > 120:
+            step = max(1, n_pts // 120)
+            indexes = list(range(0, n_pts, step))
+            if indexes[-1] != n_pts - 1:
+                indexes.append(n_pts - 1)
+            cab_tel = cab_tel[indexes]
+
+        pts: list[CabinetTempPoint] = []
+        temps: list[float] = []
+        for r in cab_tel.iter_rows(named=True):
+            hb_utc = ensure_utc(r["heartbeat_at"])
+            t_val = round(float(r["temperature"]), 1)
+            temps.append(t_val)
+            pts.append(
+                CabinetTempPoint(
+                    timestamp_utc=hb_utc.isoformat(),
+                    timestamp_local=format_local(hb_utc, tz),
+                    temperature_c=t_val,
+                )
+            )
+
+        avg_c = round(sum(temps) / len(temps), 1) if temps else None
+        min_c = min(temps) if temps else None
+        max_c = max(temps) if temps else None
+        series_list.append(
+            CabinetTempSeries(
+                cabinet_id=cid,
+                points=pts,
+                avg_c=avg_c,
+                min_c=min_c,
+                max_c=max_c,
+            )
+        )
+
+    return CabinetTemperatureTimeseriesResponse(
+        meta=meta,
+        station_id=selected_station,
+        station_name=selected_station,
+        timezone=_station_timezone(data, selected_station),
+        hours=hours,
+        warn_threshold_c=warn_t,
+        critical_threshold_c=crit_t,
+        series=series_list,
+        available_stations=available_choices,
+    )
+
+
+def _station_timezone(data: ProfileData, station_id: str) -> str:
+    """IANA timezone của trạm (mặc định UTC nếu không tìm thấy)."""
+    row = data.stations.filter(pl.col("station_id") == station_id)
+    return str(row["timezone"][0]) if row.height > 0 else "UTC"
+
+
+def build_ready_batteries_timeseries(
+    data: ProfileData,
+    *,
+    hours: int = 6,
+    step_minutes: int = 15,
+    as_of: datetime | None = None,
+    country: str | None = None,
+    settings: Settings | None = None,
+    knowledge: Knowledge | None = None,
+    profiles: list[str] | None = None,
+) -> ReadyBatteriesTimeseriesResponse:
+    """API GET /api/dashboard/timeseries/ready-batteries (DASHBOARD_UI_PLAN §3)."""
+    cfg = settings or get_settings()
+    k = knowledge or default_knowledge()
+    meta = _build_meta(data, as_of, country, profiles or [data.profile], k)
+    eff_as_of = meta.as_of
+    hours = max(1, min(24, int(hours)))
+    step_minutes = max(5, min(60, int(step_minutes)))
+
+    st_df = data.stations.filter(pl.col("country") == country) if country else data.stations
+    if st_df.height == 0:
+        st_df = data.stations
+
+    st_rows = list(st_df.sort("station_id").iter_rows(named=True))
+    cabs_by_st: dict[str, list[str]] = defaultdict(list)
+    for r in data.cabinets.iter_rows(named=True):
+        cabs_by_st[str(r["station_id"])].append(str(r["cabinet_id"]))
+
+    total_steps = (hours * 60) // step_minutes
+    time_points = [
+        eff_as_of - timedelta(minutes=(total_steps - i) * step_minutes)
+        for i in range(total_steps + 1)
+    ]
+
+    series_points_by_station: dict[str, list[ReadyBatteryPoint]] = defaultdict(list)
+    timestamp_labels: list[str] = []
+
+    for t_step in time_points:
+        by_cab = compute_ready_batteries_by_cabinet(
+            data.slots,
+            data.cabinet_telemetry,
+            t_step,
+            ready_soc_pct=cfg.ready_battery_soc_pct,
+            charge_rate_pct_per_hour=cfg.battery_charge_rate_pct_per_hour,
+        )
+        t_utc_str = ensure_utc(t_step).isoformat()
+        timestamp_labels.append(t_utc_str)
+
+        for s_row in st_rows:
+            sid = str(s_row["station_id"])
+            tz = str(s_row["timezone"])
+            c_ids = cabs_by_st.get(sid, [])
+            ready_cnt = sum(by_cab.get(cid, (0, 0))[0] for cid in c_ids)
+            total_cnt = sum(by_cab.get(cid, (0, 0))[1] for cid in c_ids)
+            pct = round((ready_cnt / total_cnt) * 100.0, 1) if total_cnt > 0 else 0.0
+            series_points_by_station[sid].append(
+                ReadyBatteryPoint(
+                    timestamp_utc=t_utc_str,
+                    timestamp_local=format_local(t_step, tz),
+                    ready_count=ready_cnt,
+                    total_slots=total_cnt,
+                    ready_pct=pct,
+                )
+            )
+
+    series_list: list[StationReadyBatterySeries] = []
+    for s_row in st_rows:
+        sid = str(s_row["station_id"])
+        pts = series_points_by_station.get(sid, [])
+        curr_pct = pts[-1].ready_pct if pts else 0.0
+        series_list.append(
+            StationReadyBatterySeries(
+                station_id=sid,
+                station_name=sid,
+                country=str(s_row["country"]),
+                points=pts,
+                current_ready_pct=curr_pct,
+            )
+        )
+
+    return ReadyBatteriesTimeseriesResponse(
+        meta=meta,
+        hours=hours,
+        step_minutes=step_minutes,
+        timestamps=timestamp_labels,
+        series=series_list,
+    )
+
+
+def build_alarms_page(
+    data: ProfileData,
+    *,
+    as_of: datetime | None = None,
+    country: str | None = None,
+    settings: Settings | None = None,
+    knowledge: Knowledge | None = None,
+    notifier: NotifierSnapshot | None = None,
+    profiles: list[str] | None = None,
+) -> AlarmsResponse:
+    """API GET /api/dashboard/alarms: hợp nhất 3 nguồn theo DASHBOARD_UI_PLAN §2.3."""
+    cfg = settings or get_settings()
+    k = knowledge or default_knowledge()
+    notif = notifier or NotifierSnapshot(outbox=[], cards=[], latest_feedback={})
+    meta = _build_meta(data, as_of, country, profiles or [data.profile], k)
+    eff_as_of = meta.as_of
+
+    alarms: list[AlarmItem] = []
+    seen_ids: set[str] = set()
+
+    st_df = data.stations
+    st_country_map = {str(r["station_id"]): str(r["country"]) for r in st_df.iter_rows(named=True)}
+    st_tz_map = {str(r["station_id"]): str(r["timezone"]) for r in st_df.iter_rows(named=True)}
+
+    cabs_df = data.cabinets
+    cab_to_st = {str(r["cabinet_id"]): str(r["station_id"]) for r in cabs_df.iter_rows(named=True)}
+
+    # Nguồn 1: incidents.jsonl của detector nếu có (§2.3)
+    incidents_candidates = [
+        data.profile_dir / "incidents.jsonl",
+        cfg.data_dir / "incidents.jsonl",
+    ]
+    for inc_file in incidents_candidates:
+        if inc_file.exists():
+            try:
+                for line in inc_file.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    obj = json.loads(line)
+                    inc_id = str(obj.get("incident_id") or "")
+                    if not inc_id or inc_id in seen_ids:
+                        continue
+
+                    fs_str = obj.get("first_seen_at")
+                    if fs_str:
+                        fs_dt = ensure_utc(datetime.fromisoformat(fs_str.replace("Z", "+00:00")))
+                        if fs_dt > eff_as_of:
+                            continue
+                    else:
+                        fs_dt = eff_as_of
+
+                    inc_country = obj.get("country")
+                    if (
+                        country
+                        and inc_country
+                        and str(inc_country) != country
+                        and str(inc_country) != "GLOBAL"
+                    ):
+                        continue
+
+                    err_code = str(obj.get("error_code") or "")
+                    err_entry = k.error_catalog.by_code.get(err_code) if err_code else None
+                    fallback_type = str(obj.get("probable_cause") or err_code or "Sự cố BSS")
+                    alarm_type = err_entry.description if err_entry else fallback_type
+
+                    raw_sev = str(obj.get("severity") or "P2").upper()
+                    sev_mapped: Literal["Critical", "Major", "Minor"] = "Major"
+                    if "P1" in raw_sev:
+                        sev_mapped = "Critical"
+                    elif "P3" in raw_sev:
+                        sev_mapped = "Minor"
+
+                    fb = notif.latest_feedback.get(inc_id)
+                    st2 = _feedback_status_line(fb)
+
+                    st_id = str(obj.get("station_id") or "")
+                    cab_id = str(obj.get("cabinet_id") or "")
+                    originator = cab_id if cab_id else (st_id if st_id else "BSS Network")
+                    session_ids = obj.get("session_ids") or []
+                    first_sid = session_ids[0] if session_ids else None
+
+                    alarms.append(
+                        AlarmItem(
+                            alarm_id=inc_id,
+                            start_time_utc=fs_dt.isoformat(),
+                            start_time_local=format_local(fs_dt, st_tz_map.get(st_id, "UTC")),
+                            originator=originator,
+                            station_id=st_id if st_id else None,
+                            cabinet_id=cab_id if cab_id else None,
+                            alarm_type=alarm_type,
+                            severity=sev_mapped,
+                            status_line1="Active",
+                            status_line2=st2,
+                            is_mock=False,
+                            details_link=f"/dashboard/sessions/{first_sid}" if first_sid else None,
+                            ack_link=f"/feedback/{inc_id}/confirm",
+                        )
+                    )
+                    seen_ids.add(inc_id)
+            except Exception:
+                pass
+
+    # Nguồn 2: trạng thái gửi và feedback trong notifier.sqlite (cards & outbox)
+    for card in notif.cards:
+        inc_id = str(card.get("incident_id") or "")
+        if not inc_id or inc_id in seen_ids:
+            continue
+        card_json_str = str(card.get("card_json") or "{}")
+        first_sid, _cat_str, sev_str = extract_session_from_card_json(card_json_str)
+        try:
+            parsed = json.loads(card_json_str)
+        except Exception:
+            parsed = {}
+
+        card_country = parsed.get("country")
+        if (
+            country
+            and card_country
+            and str(card_country) != country
+            and str(card_country) != "GLOBAL"
+        ):
+            continue
+
+        raw_sev = str(sev_str or parsed.get("severity") or "P2").upper()
+        sev_mapped = "Major"
+        if "P1" in raw_sev:
+            sev_mapped = "Critical"
+        elif "P3" in raw_sev:
+            sev_mapped = "Minor"
+
+        fb = notif.latest_feedback.get(inc_id)
+        st2 = _feedback_status_line(fb)
+
+        err_code = str(parsed.get("error_code") or "")
+        err_entry = k.error_catalog.by_code.get(err_code) if err_code else None
+        fallback_msg = str(
+            parsed.get("probable_cause") or parsed.get("title") or "Cảnh báo hệ thống"
+        )
+        alarm_type = err_entry.description if err_entry else fallback_msg
+
+        st_id = str(parsed.get("station_id") or "")
+        cab_id = str(parsed.get("cabinet_id") or "")
+        originator = cab_id if cab_id else (st_id if st_id else "BSS Network")
+        rec_at = str(card.get("received_at") or eff_as_of.isoformat())
+        start_utc_str, start_local_str = rec_at, rec_at
+        fs_raw = parsed.get("first_seen_at")
+        if isinstance(fs_raw, str) and fs_raw:
+            fs_dt = ensure_utc(datetime.fromisoformat(fs_raw.replace("Z", "+00:00")))
+            card_tz = str(parsed.get("timezone") or st_tz_map.get(st_id, "UTC"))
+            start_utc_str, start_local_str = fs_dt.isoformat(), format_local(fs_dt, card_tz)
+        sids = parsed.get("session_ids")
+        if isinstance(sids, list) and sids and isinstance(sids[0], str):
+            first_sid = sids[0]
+
+        ch = card.get("channel", "it-ops")
+        det_link = f"/dashboard/sessions/{first_sid}" if first_sid else f"/#channel-{ch}"
+
+        alarms.append(
+            AlarmItem(
+                alarm_id=inc_id,
+                start_time_utc=start_utc_str,
+                start_time_local=start_local_str,
+                originator=originator,
+                station_id=st_id if st_id else None,
+                cabinet_id=cab_id if cab_id else None,
+                alarm_type=alarm_type,
+                severity=sev_mapped,
+                status_line1="Active",
+                status_line2=st2,
+                is_mock=True,  # Nhãn 'mẫu' như mục 6.3
+                details_link=det_link,
+                ack_link=f"/feedback/{inc_id}/confirm",
+            )
+        )
+        seen_ids.add(inc_id)
+
+    # Nguồn 3: Cảnh báo thiết bị tính tại as_of (mất heartbeat, nhiệt > 55°C hoặc > 60°C)
+    cab_online = compute_cabinet_online_map(
+        data.cabinets,
+        data.cabinet_telemetry,
+        eff_as_of,
+        online_window_seconds=cfg.cabinet_online_window_seconds,
+    )
+    for cid, (online, last_hb) in cab_online.items():
+        st_id = cab_to_st.get(cid, "")
+        st_c = st_country_map.get(st_id, "VN")
+        if country and st_c != country:
+            continue
+        tz = st_tz_map.get(st_id, "UTC")
+
+        if not online:
+            alarm_id = f"DEV-{cid}-HEARTBEAT"
+            fb = notif.latest_feedback.get(alarm_id)
+            st2 = _feedback_status_line(fb)
+            hb_utc = ensure_utc(last_hb) if last_hb else (eff_as_of - timedelta(minutes=2))
+            alarms.append(
+                AlarmItem(
+                    alarm_id=alarm_id,
+                    start_time_utc=hb_utc.isoformat(),
+                    start_time_local=format_local(hb_utc, tz),
+                    originator=cid,
+                    station_id=st_id if st_id else None,
+                    cabinet_id=cid,
+                    alarm_type="Mất kết nối heartbeat (> 2 phút)",
+                    severity="Critical",
+                    status_line1="Active",
+                    status_line2=st2,
+                    is_mock=False,
+                    details_link=f"/dashboard/stations/{st_id}" if st_id else None,
+                    ack_link=f"/feedback/{alarm_id}/confirm",
+                )
+            )
+
+    thresholds = k.error_catalog.thresholds
+    warn_t = float(thresholds.temp_warn_1_c)
+    crit_t = float(thresholds.temp_warn_2_c)
+    win_15m = eff_as_of - timedelta(minutes=15)
+    recent_tel = data.cabinet_telemetry.filter(
+        (pl.col("heartbeat_at") >= win_15m)
+        & (pl.col("heartbeat_at") <= eff_as_of)
+        & pl.col("temperature").is_not_null()
+    )
+    if recent_tel.height > 0:
+        latest_cabs = recent_tel.sort("heartbeat_at").group_by("cabinet_id").last()
+        for r in latest_cabs.iter_rows(named=True):
+            cid = str(r["cabinet_id"])
+            st_id = cab_to_st.get(cid, "")
+            st_c = st_country_map.get(st_id, "VN")
+            if country and st_c != country:
+                continue
+            tz = st_tz_map.get(st_id, "UTC")
+            t_val = float(r["temperature"])
+            hb_utc = ensure_utc(r["heartbeat_at"])
+
+            if t_val > crit_t:
+                alarm_id = f"DEV-{cid}-TEMP-CRIT"
+                fb = notif.latest_feedback.get(alarm_id)
+                st2 = _feedback_status_line(fb)
+                alarms.append(
+                    AlarmItem(
+                        alarm_id=alarm_id,
+                        start_time_utc=hb_utc.isoformat(),
+                        start_time_local=format_local(hb_utc, tz),
+                        originator=cid,
+                        station_id=st_id if st_id else None,
+                        cabinet_id=cid,
+                        alarm_type=f"Quá nhiệt tủ (> {crit_t:.0f}°C ngắt nguồn - {t_val:.1f}°C)",
+                        severity="Critical",
+                        status_line1="Active",
+                        status_line2=st2,
+                        is_mock=False,
+                        details_link=f"/dashboard/stations/{st_id}" if st_id else None,
+                        ack_link=f"/feedback/{alarm_id}/confirm",
+                    )
+                )
+            elif t_val > warn_t:
+                alarm_id = f"DEV-{cid}-TEMP-WARN"
+                fb = notif.latest_feedback.get(alarm_id)
+                st2 = _feedback_status_line(fb)
+                alarms.append(
+                    AlarmItem(
+                        alarm_id=alarm_id,
+                        start_time_utc=hb_utc.isoformat(),
+                        start_time_local=format_local(hb_utc, tz),
+                        originator=cid,
+                        station_id=st_id if st_id else None,
+                        cabinet_id=cid,
+                        alarm_type=f"Nhiệt độ tủ cao (> {warn_t:.0f}°C - {t_val:.1f}°C)",
+                        severity="Major",
+                        status_line1="Active",
+                        status_line2=st2,
+                        is_mock=False,
+                        details_link=f"/dashboard/stations/{st_id}" if st_id else None,
+                        ack_link=f"/feedback/{alarm_id}/confirm",
+                    )
+                )
+
+    alarms.sort(key=lambda a: a.start_time_utc, reverse=True)
+    crit_cnt = sum(1 for a in alarms if a.severity == "Critical")
+    maj_cnt = sum(1 for a in alarms if a.severity == "Major")
+    min_cnt = sum(1 for a in alarms if a.severity == "Minor")
+
+    return AlarmsResponse(
+        meta=meta,
+        alarms=alarms,
+        total=len(alarms),
+        critical_count=crit_cnt,
+        major_count=maj_cnt,
+        minor_count=min_cnt,
     )
 
 
@@ -986,6 +1543,36 @@ def build_overview(
             )
         return items
 
+    temp_ts = build_cabinet_temperature_timeseries(
+        data,
+        station_id=None,
+        hours=1,
+        as_of=eff_as_of,
+        country=country,
+        settings=cfg,
+        knowledge=k,
+        profiles=profiles,
+    )
+    ready_ts = build_ready_batteries_timeseries(
+        data,
+        hours=6,
+        step_minutes=15,
+        as_of=eff_as_of,
+        country=country,
+        settings=cfg,
+        knowledge=k,
+        profiles=profiles,
+    )
+    alarms_resp = build_alarms_page(
+        data,
+        as_of=eff_as_of,
+        country=country,
+        settings=cfg,
+        knowledge=k,
+        notifier=notif,
+        profiles=profiles,
+    )
+
     return OverviewResponse(
         meta=meta,
         kpi_total=kpi_total,
@@ -998,6 +1585,9 @@ def build_overview(
             top_slots=_top5(slot_fail_24h, slot_tot_24h),
         ),
         ready_battery_note=READY_BATTERY_APPROX_NOTE,
+        temperature_timeseries=temp_ts,
+        ready_batteries_timeseries=ready_ts,
+        alarms=alarms_resp,
     )
 
 
@@ -1252,11 +1842,22 @@ def build_station_detail(
             )
         )
 
+    st_temp_ts = build_cabinet_temperature_timeseries(
+        data,
+        station_id=station_id,
+        hours=1,
+        as_of=eff_as_of,
+        country=None,
+        settings=cfg,
+        knowledge=k,
+        profiles=profiles,
+    )
     return StationDetailResponse(
         meta=meta,
         station=station_row,
         cabinets=cabinet_details,
         ready_battery_note=READY_BATTERY_APPROX_NOTE,
+        temperature_timeseries=st_temp_ts,
     )
 
 

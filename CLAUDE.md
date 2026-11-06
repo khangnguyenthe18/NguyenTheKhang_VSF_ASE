@@ -252,7 +252,7 @@ docker-compose.yml
 | `HARDWARE` | Thiết bị tủ/khoang, kết nối tủ | Field Ops |
 | `PAYMENT` | Cổng thanh toán, đối soát | Payment Ops |
 | `BUSINESS` | Nghiệp vụ (gói thuê, nợ cước, thiếu pin) | Business Ops |
-| `USER` | Thao tác người dùng | Không alert; chỉ thống kê, alert khi tăng đột biến |
+| `USER` | Thao tác người dùng | **CSKH** (gom mỗi 15 phút, mục 8); không gọi LLM riêng |
 | `BATTERY_QUALITY` | Chất lượng pin (SOC/SOH/BMS) | Battery Ops |
 | `UNKNOWN` | Không match rule | IT Ops, `needs_human_review` |
 
@@ -479,8 +479,20 @@ Adaptive Card rút gọn, "channel" theo category; P1 đánh dấu người tr�
 - Retry với **exponential backoff + jitter**, tôn trọng `Retry-After` khi 429; không retry 4xx (trừ 429).
 - Transactional outbox; idempotency key `incident_id:revision`.
 - Gửi lại chỉ khi severity tăng; incident đang mở thì append, không gửi mail mới.
-- `USER` không gửi alert (trừ khi tỷ lệ tăng đột biến).
+- `USER` không gửi alert tức thời; gửi CSKH theo chu kỳ gom (mục "Lịch gửi thông báo").
 
+### Lịch gửi thông báo (theo ý mentor, chốt 06/11)
+| Loại | Khi nào gửi | Gửi cho ai | Nội dung |
+|---|---|---|---|
+| **P1** (an toàn / tiền / tài sản) | **Ngay** khi incident mở (SF5 < 60s) | Đúng team theo `routing.yaml` | 1 alert/incident theo mẫu Mail ở trên |
+| **P2 / P3** (trừ USER) | **Gom mỗi 15 phút** (`notify.batch_interval_minutes`, mốc tròn :00/:15/…) | Đúng team; mỗi team **1 tin/chu kỳ**, chỉ khi có lỗi | Mọi lỗi của team trong chu kỳ, nhóm theo incident (mã GD, giờ địa phương trạm, bước, mã lỗi, phạm vi) |
+| **USER** | Gom mỗi 15 phút như trên | **CSKH** | Lỗi người dùng để hỗ trợ khách; không gọi LLM riêng cho từng lỗi |
+| **Báo cáo tổng hợp ngày** | **1 lần/ngày, 18:00 giờ VN** (`Asia/Ho_Chi_Minh`) | Quản lý vận hành + mọi team | Toàn bộ lỗi từ 18:00 hôm trước tới 18:00 hôm nay, mọi nhóm kể cả USER; đếm theo nhóm/nước/trạm, CSV đầy đủ, 1 nhận xét LLM |
+
+- Chu kỳ, giờ báo cáo ngày đặt trong `knowledge/detector.yaml`, không hardcode. Mốc chu kỳ/ngày tính theo `Clock` (SimClock khi replay).
+- Idempotency qua outbox: P1 `incident_id:revision`; tin gom `batch:{team}:{window_start}`; báo cáo ngày `daily:{date}`.
+- LLM: P1 và incident P2/P3 vẫn được triage theo incident (bất đồng bộ; kết quả có trong tin gom kế tiếp hoặc revision của P1); báo cáo ngày 1 lần gọi. Phần LLM làm ở Sprint 1.
+- Chỉ tiêu (cần mentor xác nhận): SF5 < 60s áp cho **P1**; P2/P3/USER tới tay team trong ≤ 1 chu kỳ. SF8 đếm alert P1/incident; tin gom tính 1 tin/team/chu kỳ.
 ---
 
 ## 9. Pair contract với Võ Doanh Nhân — **DEFERRED**
@@ -587,6 +599,7 @@ Chất lượng đánh giá phụ thuộc **số case lỗi**, không phải t�
 | `smoke` | CI, unit/e2e test | 2 (VN) | 1 | ~300 | ~300 |
 | `dev` | Viết và chỉnh rule hằng ngày | 5 (VN 2, PH 1, ID 2 [WIB + WITA]) | 14 | ~1.000 | ~14 nghìn |
 | `eval` | Đo SF1–SF9 và ablation | 11 (VN 7, PH 2, ID 2 [WIB + WITA]) | 30 (20 baseline/dev + 10 test) | ~1.500 | ~45 nghìn |
+| `demo` | Chỉ trình diễn dashboard + luồng cảnh báo (`make demo`); **không dùng đo SF** | 40 (VN 28, PH 7, ID 5) | 3 | ~6.000 | ~18 nghìn |
 
 Yêu cầu tối thiểu với `eval` (simulator tự kiểm tra sau khi sinh, in bảng đếm và **báo lỗi nếu không đạt**):
 - Mỗi category có **≥ 50 case lỗi** trong tập test.
@@ -691,7 +704,7 @@ Quy tắc:
 - Async I/O toàn bộ; strict typing; Pydantic v2 cho mọi contract; không dùng dict "trôi nổi" qua ranh giới module.
 - Error handling rõ ràng; retry dùng exponential backoff + jitter.
 - Cấu hình qua env + file YAML trong `knowledge/`; không hardcode error catalog trong code.
-- Mỗi module có unit test; schema có contract test với fixtures; có e2e test chạy simulator → alert trên MailHog/mock Teams.
+- Mỗi module có unit test; schema có contract test với fixtures; có e2e test chạy simulator → alert trên Mailpit/mock Teams.
 - Code tối giản, dễ test; giải thích "vì sao" trong docstring cho quyết định kiến trúc không hiển nhiên.
 - Log có `trace_id`/`session_id`/`incident_id` để truy vết.
 
@@ -703,10 +716,10 @@ Quy tắc:
 1. `common/` models + `transport.py` (`EventSource`/`EventSink`, `SimClock`, `JsonlSource`/`JsonlSink`) + `knowledge/` YAML (state machine, error catalog, routing).
 2. `simulator/`: profile `smoke` + `dev` trước (`eval` sau), entities, traffic theo giờ, scenario injection, xáo trộn/nhân bản event, ground truth, ghi JSONL + kiểm tra số case tối thiểu.
 3. `detector/`: state machine tracker → rule classifier → correlator (anomaly EWMA có thể để Sprint 1).
-4. `notifier/` tối thiểu: routing + template Mail/Teams → **MailHog** + **mock Teams**; outbox đơn giản.
+4. `notifier/` tối thiểu: routing + template Mail/Teams → **Mailpit** + **mock Teams**; outbox đơn giản.
 5. `evaluator/`: SF1–SF5, SF7, SF8 cho **rule-only** = baseline metric.
 6. Thí nghiệm giả định rủi ro: **field ablation** theo tầng T0→T3 (mục 10.1), rule-only, báo cáo SF2/SF4 theo category + danh sách trường yêu cầu gửi mentor. Detector có cờ `available_fields` và báo cáo rule bị tắt.
-7. docker-compose tối thiểu: chỉ MailHog. Một lệnh chạy e2e: `make e2e PROFILE=smoke`.
+7. docker-compose tối thiểu: chỉ Mailpit. Một lệnh chạy e2e: `make e2e PROFILE=smoke`.
 
 ### Sprint 1 → CP1 (18/11) — MVP trên mock
 8. `triage/`: `LLMClient` (adapter `anthropic` + `ollama`), `ContextBuilder` cho single-shot, cost guard (mục 17) + chọn runbook theo ánh xạ `error_code` + validate evidence + guardrails + fallback rule.
@@ -733,6 +746,8 @@ Quy tắc:
 - Chưa có schema dữ liệu masked → field ablation T0–T3 + adapter cấu hình được.
 - Đã có người gán nhãn mẫu dữ liệu masked.
 - Mail: aiosmtplib → **Mailpit** (Docker, container duy nhất) khi dev/demo; dự án thật trỏ sang SMTP công ty chỉ bằng `.env` (host/port/TLS/auth). Teams: mock Teams.
+- Thông báo (mục 8): **P1 gửi ngay** cho đúng team; **P2/P3 gom mỗi 15 phút** gửi đúng team; **USER gửi CSKH** theo cùng chu kỳ; **báo cáo tổng hợp 1 lần/ngày lúc 18:00 giờ VN** cho quản lý + mọi team. Không gọi LLM riêng cho lỗi USER.
+- Dashboard: nền bản đồ **Vietmap** (vector qua `@vietmap/vietmap-gl-leaflet`, key `ASE_VIETMAP_API_KEY` trong `.env`), không dùng OSM. Profile `demo` (40 trạm) chỉ để trình diễn.
 - Phần đối tác: chỉ là điểm cộng, chỉ làm khi chủ dự án yêu cầu. Không sinh `ase.logs.raw` / `app_logs`; dùng `latency_ms` trên event.
 - Quốc gia: **sinh dữ liệu 3 nước đã triển khai** VN, PH, ID (mục 10, "Phạm vi quốc gia"); `smoke` chỉ VN. **Không sinh IN, TH, MY** (mới công bố kế hoạch); thêm sau qua `countries.yaml`. OPS: một đội trung tâm, alert tiếng Việt cho mọi nước, routing theo category.
 

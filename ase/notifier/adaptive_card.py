@@ -139,6 +139,16 @@ def build_adaptive_card(
         "channel": alert.channel,
         "severity": inc.severity.value,
         "category": inc.category.value,
+        # Metadata cho bảng Cảnh báo của dashboard (mock Teams lưu nguyên card)
+        "station_id": inc.station_id,
+        "cabinet_id": inc.cabinet_id,
+        "slot_id": inc.slot_id,
+        "error_code": inc.error_code,
+        "country": inc.country,
+        "timezone": inc.timezone,
+        "first_seen_at": inc.first_seen_at.isoformat(),
+        "session_ids": inc.session_ids[:5],
+        "probable_cause": inc.probable_cause,
         "body": body,
         "actions": actions,
     }

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,10 +44,23 @@ class Settings(BaseSettings):
     ready_battery_soc_pct: float = Field(default=90.0, ge=0.0, le=100.0)
     # Tốc độ sạc giả định (%SOC/giờ) để ước lượng SOC hiện tại từ lần đọc telemetry cuối.
     battery_charge_rate_pct_per_hour: float = Field(default=60.0, ge=0.0)
+    # Key Vietmap cho nền bản đồ. CHỈ dùng browser key (key này lộ ra trình duyệt; giới hạn HTTP
+    # referer trong console Vietmap). Server key (VIETMAP_SERVER_API_KEY) không đưa vào trang.
+    vietmap_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ASE_VIETMAP_API_KEY", "VIETMAP_BROWSER_API_KEY"),
+    )
 
     @field_validator("smtp_user", mode="before")
     @classmethod
     def _empty_user_to_none(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @field_validator("vietmap_api_key", mode="before")
+    @classmethod
+    def _empty_vietmap_key_to_none(cls, v: object) -> object:
         if isinstance(v, str) and not v.strip():
             return None
         return v

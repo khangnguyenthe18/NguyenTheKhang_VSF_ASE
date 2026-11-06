@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,9 +16,12 @@ from fastapi.testclient import TestClient
 from ase.common.config import Settings
 from ase.common.models import Step
 from ase.dashboard.data import (
+    NotifierSnapshot,
+    ProfileData,
     clear_cache,
 )
 from ase.dashboard.metrics import (
+    build_alarms_page,
     compute_cabinet_online_map,
     compute_funnel,
     compute_ready_batteries_by_cabinet,
@@ -28,13 +32,16 @@ from ase.dashboard.metrics import (
     filter_sessions_today,
 )
 from ase.dashboard.models import (
+    AlarmsResponse,
     AlertsPageResponse,
     BatteriesPageResponse,
+    CabinetTemperatureTimeseriesResponse,
     GroundTruthPageResponse,
     IncidentsPlaceholderResponse,
     MetricsPlaceholderResponse,
     OverviewResponse,
     PaymentsPageResponse,
+    ReadyBatteriesTimeseriesResponse,
     SessionDetailResponse,
     SessionsPageResponse,
     StationDetailResponse,
@@ -710,6 +717,9 @@ def test_operational_tabs_never_read_ground_truth_csv(
         "/api/dashboard/alerts?profile=smoke",
         "/api/dashboard/incidents?profile=smoke",
         "/api/dashboard/metrics?profile=smoke",
+        "/api/dashboard/timeseries/cabinet-temperature?profile=smoke",
+        "/api/dashboard/timeseries/ready-batteries?profile=smoke",
+        "/api/dashboard/alarms?profile=smoke",
         "/dashboard?profile=smoke",
         "/dashboard/stations?profile=smoke",
         f"/dashboard/stations/{first_station_id}?profile=smoke",
@@ -775,3 +785,306 @@ def test_station_coordinates_deterministic_and_within_country_cities() -> None:
         assert any(abs(st.lat - c.lat) <= 0.03 and abs(st.lon - c.lon) <= 0.03 for c in cities), (
             f"Station {st.station_id} ({st.lat}, {st.lon}) outside city bounds"
         )
+
+
+# --- 6. New Timeseries & Alarms tests (DASHBOARD_UI_PLAN §4) ----------------------------------
+
+
+def test_new_timeseries_and_alarms_api_smoke(smoke_env: tuple[Settings, Path]) -> None:
+    settings, db_path = smoke_env
+    app = create_app(db_path=db_path, settings=settings)
+    client = TestClient(app)
+
+    # 1. Cabinet temperature timeseries
+    r_temp = client.get("/api/dashboard/timeseries/cabinet-temperature?profile=smoke&hours=1")
+    assert r_temp.status_code == 200
+    temp_resp = CabinetTemperatureTimeseriesResponse.model_validate(r_temp.json())
+    assert temp_resp.warn_threshold_c == K.error_catalog.thresholds.temp_warn_1_c
+    assert temp_resp.critical_threshold_c == K.error_catalog.thresholds.temp_warn_2_c
+    assert len(temp_resp.available_stations) == 2
+    assert len(temp_resp.series) >= 2
+
+    # 2. Ready batteries timeseries
+    r_ready = client.get(
+        "/api/dashboard/timeseries/ready-batteries?profile=smoke&hours=6&step_minutes=15"
+    )
+    assert r_ready.status_code == 200
+    ready_resp = ReadyBatteriesTimeseriesResponse.model_validate(r_ready.json())
+    assert len(ready_resp.series) == 2
+    assert len(ready_resp.timestamps) > 0
+
+    # 3. Alarms API
+    r_alarms = client.get("/api/dashboard/alarms?profile=smoke")
+    assert r_alarms.status_code == 200
+    alarms_resp = AlarmsResponse.model_validate(r_alarms.json())
+    assert alarms_resp.total >= 0
+
+
+def test_alarms_severity_mapping_and_feedback_status() -> None:
+    as_of = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
+
+    # Synthetic profile data with stations and cabinets
+    st_df = pl.DataFrame(
+        {
+            "station_id": ["ST-01"],
+            "country": ["VN"],
+            "timezone": ["Asia/Ho_Chi_Minh"],
+            "timezone_offset": ["+07:00"],
+            "model_gen": ["G1"],
+            "lat": [10.8],
+            "lon": [106.6],
+        }
+    )
+    cab_df = pl.DataFrame(
+        {
+            "cabinet_id": ["CAB-01"],
+            "station_id": ["ST-01"],
+            "model_gen": ["G1"],
+        }
+    )
+    # Cabinet online (heartbeat 30s ago)
+    tel_df = pl.DataFrame(
+        {
+            "cabinet_id": ["CAB-01"],
+            "slot_id": [None],
+            "door_state": ["CLOSED"],
+            "battery_detected": [True],
+            "soc": [95.0],
+            "temperature": [32.0],
+            "heartbeat_at": [as_of - timedelta(seconds=30)],
+            "hw_error_code": [None],
+        }
+    )
+    slots_df = pl.DataFrame({"cabinet_id": ["CAB-01"], "slot_id": ["01"]})
+    empty_df = pl.DataFrame()
+
+    data = ProfileData(
+        profile="synthetic",
+        profile_dir=Path("/tmp"),
+        manifest_mtime=0.0,
+        stations=st_df,
+        cabinets=cab_df,
+        slots=slots_df,
+        batteries=empty_df,
+        users=empty_df,
+        swap_sessions=empty_df,
+        payments=empty_df,
+        cabinet_telemetry=tel_df,
+        swap_events=empty_df,
+        min_time=as_of - timedelta(days=1),
+        max_time=as_of,
+        default_as_of=as_of,
+    )
+
+    # Cards with P1, P2, P3
+    card_p1 = {
+        "channel": "it-ops",
+        "incident_id": "INC-P1",
+        "revision": 1,
+        "card_json": orjson.dumps(
+            {"incident_id": "INC-P1", "severity": "P1", "station_id": "ST-01"}
+        ).decode("utf-8"),
+        "received_at": (as_of - timedelta(minutes=10)).isoformat(),
+    }
+    card_p2 = {
+        "channel": "it-ops",
+        "incident_id": "INC-P2",
+        "revision": 1,
+        "card_json": orjson.dumps(
+            {"incident_id": "INC-P2", "severity": "P2", "station_id": "ST-01"}
+        ).decode("utf-8"),
+        "received_at": (as_of - timedelta(minutes=8)).isoformat(),
+    }
+    card_p3 = {
+        "channel": "it-ops",
+        "incident_id": "INC-P3",
+        "revision": 1,
+        "card_json": orjson.dumps(
+            {"incident_id": "INC-P3", "severity": "P3", "station_id": "ST-01"}
+        ).decode("utf-8"),
+        "received_at": (as_of - timedelta(minutes=5)).isoformat(),
+    }
+
+    # Latest feedback: INC-P1 has confirm, INC-P2 has resolved, INC-P3 has no feedback
+    snapshot = NotifierSnapshot(
+        outbox=[],
+        cards=[card_p1, card_p2, card_p3],
+        latest_feedback={
+            "INC-P1": ("confirm", (as_of - timedelta(minutes=6)).isoformat()),
+            "INC-P2": ("resolved", (as_of - timedelta(minutes=4)).isoformat()),
+        },
+    )
+
+    alarms_resp = build_alarms_page(
+        data,
+        as_of=as_of,
+        settings=Settings(data_dir=Path("/tmp")),
+        knowledge=K,
+        notifier=snapshot,
+    )
+
+    alarms_by_id = {a.alarm_id: a for a in alarms_resp.alarms}
+    assert alarms_by_id["INC-P1"].severity == "Critical"
+    assert alarms_by_id["INC-P1"].status_line2 == "Đã xác nhận"
+
+    assert alarms_by_id["INC-P2"].severity == "Major"
+    assert alarms_by_id["INC-P2"].status_line2 == "Đã xử lý"
+
+    assert alarms_by_id["INC-P3"].severity == "Minor"
+    assert alarms_by_id["INC-P3"].status_line2 == "Chưa xác nhận"
+
+
+def test_alarms_device_alarm_on_lost_heartbeat() -> None:
+    as_of = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
+
+    st_df = pl.DataFrame(
+        {
+            "station_id": ["ST-01"],
+            "country": ["VN"],
+            "timezone": ["Asia/Ho_Chi_Minh"],
+            "timezone_offset": ["+07:00"],
+            "model_gen": ["G1"],
+            "lat": [10.8],
+            "lon": [106.6],
+        }
+    )
+    cab_df = pl.DataFrame(
+        {
+            "cabinet_id": ["CAB-LOST-HB"],
+            "station_id": ["ST-01"],
+            "model_gen": ["G1"],
+        }
+    )
+    # Heartbeat 5 minutes ago (> 2 min threshold)
+    tel_df = pl.DataFrame(
+        {
+            "cabinet_id": ["CAB-LOST-HB"],
+            "slot_id": [None],
+            "door_state": ["CLOSED"],
+            "battery_detected": [True],
+            "soc": [90.0],
+            "temperature": [30.0],
+            "heartbeat_at": [as_of - timedelta(minutes=5)],
+            "hw_error_code": [None],
+        }
+    )
+    slots_df = pl.DataFrame({"cabinet_id": ["CAB-LOST-HB"], "slot_id": ["01"]})
+    empty_df = pl.DataFrame()
+
+    data = ProfileData(
+        profile="synthetic",
+        profile_dir=Path("/tmp"),
+        manifest_mtime=0.0,
+        stations=st_df,
+        cabinets=cab_df,
+        slots=slots_df,
+        batteries=empty_df,
+        users=empty_df,
+        swap_sessions=empty_df,
+        payments=empty_df,
+        cabinet_telemetry=tel_df,
+        swap_events=empty_df,
+        min_time=as_of - timedelta(days=1),
+        max_time=as_of,
+        default_as_of=as_of,
+    )
+
+    snapshot = NotifierSnapshot(outbox=[], cards=[], latest_feedback={})
+    alarms_resp = build_alarms_page(
+        data,
+        as_of=as_of,
+        settings=Settings(data_dir=Path("/tmp")),
+        knowledge=K,
+        notifier=snapshot,
+    )
+
+    dev_alarms = [a for a in alarms_resp.alarms if a.originator == "CAB-LOST-HB"]
+    assert len(dev_alarms) == 1
+    assert dev_alarms[0].severity == "Critical"
+    assert "Mất kết nối heartbeat" in dev_alarms[0].alarm_type
+    assert dev_alarms[0].status_line2 == "Chưa xác nhận"
+
+
+def test_html_widget_containers_and_no_inner_html_in_dashboard_js(
+    smoke_env: tuple[Settings, Path],
+) -> None:
+    settings, db_path = smoke_env
+    app = create_app(db_path=db_path, settings=settings)
+    client = TestClient(app)
+
+    # 1. HTML overview has expected widget card containers
+    resp = client.get("/dashboard?profile=smoke")
+    assert resp.status_code == 200
+    html = resp.text
+    expected_widget_ids = [
+        "widget-station-map",
+        "widget-station-table",
+        "widget-cabinet-temp",
+        "widget-ready-batteries",
+        "widget-alarms-table",
+    ]
+    for w_id in expected_widget_ids:
+        assert f'id="{w_id}"' in html, f"Missing widget card {w_id} in overview HTML"
+
+    # 2. dashboard.js does not use innerHTML for data rendering
+    js_path = Path(__file__).resolve().parents[2] / "ase" / "dashboard" / "static" / "dashboard.js"
+    js_content = js_path.read_text(encoding="utf-8")
+    assert not re.search(r"\.innerHTML\s*=", js_content), (
+        "dashboard.js must not assign to innerHTML (security rule §2.6)"
+    )
+
+
+def test_page_data_json_is_parseable_and_cannot_break_out_of_script(
+    smoke_env: tuple[Settings, Path],
+) -> None:
+    """Hồi quy: page-data bị escape thành `&#34;` làm JSON.parse lỗi -> widget JS trống."""
+    import json
+    import re
+
+    settings, db_path = smoke_env
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    pages = ["", "/stations", "/stations/VN-ST-001", "/sessions", "/payments", "/batteries"]
+    pages += ["/alerts", "/incidents", "/metrics", "/ground-truth"]
+    for page in pages:
+        html = client.get(f"/dashboard{page}?profile=smoke").text
+        m = re.search(r'<script type="application/json" id="page-data">(.*?)</script>', html, re.S)
+        assert m is not None, page
+        raw = m.group(1)
+        assert "&#34;" not in raw and "&quot;" not in raw, page  # không bị escape kiểu HTML
+        assert "<" not in raw, page  # mọi '<' đã thành \\u003c, không thể đóng thẻ script
+        assert isinstance(json.loads(raw), dict), page
+
+    # Trang tổng quan phải mang đủ dữ liệu cho các widget JS
+    html = client.get("/dashboard?profile=smoke").text
+    m = re.search(r'id="page-data">(.*?)</script>', html, re.S)
+    assert m is not None
+    data = json.loads(m.group(1))
+    for key in ("stations_map", "temperature_timeseries", "ready_batteries_timeseries", "alarms"):
+        assert key in data, key
+
+
+def test_map_uses_vietmap_not_osm_and_key_only_from_settings(
+    smoke_env: tuple[Settings, Path],
+) -> None:
+    from pydantic import SecretStr
+
+    settings, db_path = smoke_env
+    # Không phụ thuộc .env thật của máy dev: đặt key rỗng tường minh
+    settings = settings.model_copy(update={"vietmap_api_key": None})
+    html = (
+        TestClient(create_app(db_path=db_path, settings=settings))
+        .get("/dashboard?profile=smoke")
+        .text
+    )
+    assert "openstreetmap" not in html.lower()
+    assert "@vietmap/vietmap-gl-js@6.0.1/dist/vietmap-gl.js" in html  # version ghim
+    assert "@vietmap/vietmap-gl-leaflet@0.1.0/leaflet-vietmap-gl.js" in html
+    assert 'data-vietmap-key=""' in html  # chưa cấu hình key -> rỗng
+    js = (Path(__file__).parents[2] / "ase/dashboard/static/dashboard.js").read_text()
+    assert "openstreetmap" not in js.lower()
+
+    keyed = settings.model_copy(update={"vietmap_api_key": SecretStr('k"<x>')})
+    html2 = (
+        TestClient(create_app(db_path=db_path, settings=keyed)).get("/dashboard?profile=smoke").text
+    )
+    assert 'data-vietmap-key="k&#34;&lt;x&gt;"' in html2  # key được escape trong thuộc tính

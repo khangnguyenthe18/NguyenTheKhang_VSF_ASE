@@ -50,11 +50,12 @@ class StationMapItem(BaseModel):
     timezone_offset: str
     lat: float
     lon: float
-    status_color: Literal["green", "yellow", "red"]
+    status_color: Literal["green", "blue", "yellow", "orange", "red"]
     cabinets_online: int
     cabinets_total: int
     ready_batteries: int
     total_slots: int
+    ready_battery_pct: float = 0.0
     swaps_1h: int
     failed_1h: int
     fail_rate_1h: float
@@ -63,6 +64,7 @@ class StationMapItem(BaseModel):
     fail_rate_today: float
     has_p1_alert: bool = False
     as_of_local: str
+    max_temp_c: float | None = None
 
 
 class HourlySwapPoint(BaseModel):
@@ -86,6 +88,89 @@ class Hotspots24h(BaseModel):
     top_slots: list[HotspotItem]
 
 
+# --- Timeseries & Alarms models (DASHBOARD_UI_PLAN §3) ----------------------
+
+
+class CabinetTempPoint(BaseModel):
+    timestamp_utc: str
+    timestamp_local: str
+    temperature_c: float
+
+
+class CabinetTempSeries(BaseModel):
+    cabinet_id: str
+    points: list[CabinetTempPoint]
+    avg_c: float | None = None
+    min_c: float | None = None
+    max_c: float | None = None
+
+
+class StationChoice(BaseModel):
+    station_id: str
+    label: str
+
+
+class CabinetTemperatureTimeseriesResponse(BaseModel):
+    meta: DashboardMeta
+    station_id: str
+    station_name: str
+    timezone: str = "UTC"  # IANA của trạm, để JS hiển thị trục thời gian theo giờ địa phương
+    hours: int
+    warn_threshold_c: float
+    critical_threshold_c: float
+    series: list[CabinetTempSeries]
+    available_stations: list[StationChoice]
+
+
+class ReadyBatteryPoint(BaseModel):
+    timestamp_utc: str
+    timestamp_local: str
+    ready_count: int
+    total_slots: int
+    ready_pct: float
+
+
+class StationReadyBatterySeries(BaseModel):
+    station_id: str
+    station_name: str
+    country: str
+    points: list[ReadyBatteryPoint]
+    current_ready_pct: float
+
+
+class ReadyBatteriesTimeseriesResponse(BaseModel):
+    meta: DashboardMeta
+    hours: int
+    step_minutes: int
+    timestamps: list[str]
+    series: list[StationReadyBatterySeries]
+
+
+class AlarmItem(BaseModel):
+    alarm_id: str
+    start_time_utc: str
+    start_time_local: str
+    originator: str
+    station_id: str | None = None
+    cabinet_id: str | None = None
+    alarm_type: str
+    severity: Literal["Critical", "Major", "Minor"]
+    status_line1: str = "Active"
+    status_line2: str = "Chưa xác nhận"
+    is_mock: bool = False
+    details_link: str | None = None
+    ack_link: str | None = None
+
+
+class AlarmsResponse(BaseModel):
+    meta: DashboardMeta
+    alarms: list[AlarmItem]
+    total: int
+    critical_count: int
+    major_count: int
+    minor_count: int
+
+
 class OverviewResponse(BaseModel):
     meta: DashboardMeta
     kpi_total: CountryKpi
@@ -94,6 +179,9 @@ class OverviewResponse(BaseModel):
     hourly_swaps_24h: list[HourlySwapPoint]
     hotspots_24h: Hotspots24h
     ready_battery_note: str
+    temperature_timeseries: CabinetTemperatureTimeseriesResponse | None = None
+    ready_batteries_timeseries: ReadyBatteriesTimeseriesResponse | None = None
+    alarms: AlarmsResponse | None = None
 
 
 # --- §5.2 Trạm & Tủ ----------------------------------------------------------
@@ -111,12 +199,14 @@ class StationSummaryRow(BaseModel):
     cabinets_online: int
     ready_batteries: int
     total_slots: int
+    ready_battery_pct: float = 0.0
     swaps_today: int
     failed_today: int
     fail_rate_today: float
     last_heartbeat_at: datetime | None = None
     last_heartbeat_local: str | None = None
-    status_color: Literal["green", "yellow", "red"]
+    status_color: Literal["green", "blue", "yellow", "orange", "red"]
+    max_temp_c: float | None = None
 
 
 class StationsListResponse(BaseModel):
@@ -176,6 +266,7 @@ class StationDetailResponse(BaseModel):
     station: StationSummaryRow
     cabinets: list[CabinetDetail]
     ready_battery_note: str
+    temperature_timeseries: CabinetTemperatureTimeseriesResponse | None = None
 
 
 # --- §5.3 Giao dịch ----------------------------------------------------------

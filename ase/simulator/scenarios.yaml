@@ -22,6 +22,8 @@ scenarios:
         - {instance_idx: 1, day: 2, utc_hour: 3, minute: 0, duration_minutes: 40}
         - {instance_idx: 2, day: 9, utc_hour: 10, minute: 0, duration_minutes: 40}
         - {instance_idx: 3, day: 12, utc_hour: 2, minute: 30, duration_minutes: 40}
+      demo:
+        - {instance_idx: 1, day: 2, utc_hour: 3, minute: 0, duration_minutes: 40}
       eval:
         - {instance_idx: 1, day: 5, utc_hour: 3, minute: 0, duration_minutes: 40}
         - {instance_idx: 2, day: 14, utc_hour: 10, minute: 0, duration_minutes: 40}
@@ -43,6 +45,8 @@ scenarios:
         - {instance_idx: 1, day: 3, utc_hour: 1, minute: 0, duration_minutes: 360}
         - {instance_idx: 2, day: 8, utc_hour: 1, minute: 0, duration_minutes: 360}
         - {instance_idx: 3, day: 11, utc_hour: 9, minute: 0, duration_minutes: 360}
+      demo:
+        - {instance_idx: 1, day: 1, utc_hour: 1, minute: 0, duration_minutes: 360}
       eval:
         - {instance_idx: 1, day: 6, utc_hour: 1, minute: 0, duration_minutes: 360}
         - {instance_idx: 2, day: 22, utc_hour: 1, minute: 0, duration_minutes: 420}
@@ -64,6 +68,8 @@ scenarios:
         - {instance_idx: 1, day: 1, utc_hour: 0, minute: 0, duration_minutes: 2880}
         - {instance_idx: 2, day: 8, utc_hour: 0, minute: 0, duration_minutes: 2880}
         - {instance_idx: 3, day: 11, utc_hour: 0, minute: 0, duration_minutes: 2880}
+      demo:
+        - {instance_idx: 1, day: 0, utc_hour: 0, minute: 0, duration_minutes: 4320}
       eval:
         - {instance_idx: 1, day: 4, utc_hour: 0, minute: 0, duration_minutes: 4320}
         - {instance_idx: 2, day: 20, utc_hour: 0, minute: 0, duration_minutes: 4320}
@@ -84,6 +90,8 @@ scenarios:
         - {instance_idx: 1, day: 4, utc_hour: 0, minute: 0, duration_minutes: 20}
         - {instance_idx: 2, day: 9, utc_hour: 9, minute: 30, duration_minutes: 20}
         - {instance_idx: 3, day: 12, utc_hour: 0, minute: 15, duration_minutes: 20}
+      demo:
+        - {instance_idx: 1, day: 2, utc_hour: 1, minute: 0, duration_minutes: 20}
       eval:
         - {instance_idx: 1, day: 8, utc_hour: 0, minute: 0, duration_minutes: 20}
         - {instance_idx: 2, day: 21, utc_hour: 0, minute: 0, duration_minutes: 20}
@@ -104,6 +112,8 @@ scenarios:
         - {instance_idx: 1, day: 5, utc_hour: 0, minute: 0, duration_minutes: 120}
         - {instance_idx: 2, day: 10, utc_hour: 9, minute: 0, duration_minutes: 120}
         - {instance_idx: 3, day: 13, utc_hour: 0, minute: 0, duration_minutes: 120}
+      demo:
+        - {instance_idx: 1, day: 1, utc_hour: 0, minute: 0, duration_minutes: 120}
       eval:
         - {instance_idx: 1, day: 10, utc_hour: 0, minute: 0, duration_minutes: 120}
         - {instance_idx: 2, day: 22, utc_hour: 0, minute: 0, duration_minutes: 120}
@@ -123,6 +133,8 @@ scenarios:
         - {instance_idx: 1, day: 2, utc_hour: 1, minute: 0, duration_minutes: 90}
         - {instance_idx: 2, day: 8, utc_hour: 10, minute: 0, duration_minutes: 90}
         - {instance_idx: 3, day: 11, utc_hour: 1, minute: 0, duration_minutes: 90}
+      demo:
+        - {instance_idx: 1, day: 2, utc_hour: 2, minute: 0, duration_minutes: 90}
       eval:
         - {instance_idx: 1, day: 7, utc_hour: 1, minute: 0, duration_minutes: 90}
         - {instance_idx: 2, day: 21, utc_hour: 10, minute: 0, duration_minutes: 90}
@@ -144,6 +156,8 @@ scenarios:
         - {instance_idx: 1, day: 1, utc_hour: 0, minute: 0, duration_minutes: 4320}
         - {instance_idx: 2, day: 7, utc_hour: 0, minute: 0, duration_minutes: 4320}
         - {instance_idx: 3, day: 11, utc_hour: 0, minute: 0, duration_minutes: 4320}
+      demo:
+        - {instance_idx: 1, day: 0, utc_hour: 0, minute: 0, duration_minutes: 4320}
       eval:
         - {instance_idx: 1, day: 3, utc_hour: 0, minute: 0, duration_minutes: 7200}
         - {instance_idx: 2, day: 20, utc_hour: 0, minute: 0, duration_minutes: 7200}
@@ -163,6 +177,8 @@ scenarios:
         - {instance_idx: 1, day: 3, utc_hour: 10, minute: 0, duration_minutes: 120}
         - {instance_idx: 2, day: 8, utc_hour: 0, minute: 30, duration_minutes: 120}
         - {instance_idx: 3, day: 12, utc_hour: 10, minute: 0, duration_minutes: 120}
+      demo:
+        - {instance_idx: 1, day: 2, utc_hour: 10, minute: 0, duration_minutes: 120}
       eval:
         - {instance_idx: 1, day: 9, utc_hour: 10, minute: 0, duration_minutes: 120}
         - {instance_idx: 2, day: 20, utc_hour: 0, minute: 30, duration_minutes: 120}
@@ -183,6 +199,8 @@ scenarios:
         - {instance_idx: 1, day: 2, utc_hour: 11, minute: 0, duration_minutes: 120}
         - {instance_idx: 2, day: 9, utc_hour: 2, minute: 0, duration_minutes: 120}
         - {instance_idx: 3, day: 13, utc_hour: 11, minute: 0, duration_minutes: 120}
+      demo:
+        - {instance_idx: 1, day: 1, utc_hour: 2, minute: 0, duration_minutes: 120}
       eval:
         - {instance_idx: 1, day: 6, utc_hour: 11, minute: 0, duration_minutes: 120}
         - {instance_idx: 2, day: 21, utc_hour: 2, minute: 0, duration_minutes: 120}
@@ -202,6 +220,8 @@ scenarios:
         - {instance_idx: 1, day: 5, utc_hour: 2, minute: 0, duration_minutes: 90}
         - {instance_idx: 2, day: 10, utc_hour: 11, minute: 0, duration_minutes: 90}
         - {instance_idx: 3, day: 13, utc_hour: 2, minute: 0, duration_minutes: 90}
+      demo:
+        - {instance_idx: 1, day: 1, utc_hour: 4, minute: 0, duration_minutes: 90}
       eval:
         - {instance_idx: 1, day: 11, utc_hour: 2, minute: 0, duration_minutes: 90}
         - {instance_idx: 2, day: 23, utc_hour: 2, minute: 0, duration_minutes: 90}
@@ -221,6 +241,8 @@ scenarios:
         - {instance_idx: 1, day: 4, utc_hour: 10, minute: 0, duration_minutes: 90}
         - {instance_idx: 2, day: 9, utc_hour: 11, minute: 0, duration_minutes: 90}
         - {instance_idx: 3, day: 12, utc_hour: 11, minute: 0, duration_minutes: 90}
+      demo:
+        - {instance_idx: 1, day: 2, utc_hour: 5, minute: 0, duration_minutes: 90}
       eval:
         - {instance_idx: 1, day: 12, utc_hour: 10, minute: 0, duration_minutes: 90}
         - {instance_idx: 2, day: 22, utc_hour: 11, minute: 0, duration_minutes: 90}
@@ -240,6 +262,8 @@ scenarios:
         - {instance_idx: 1, day: 6, utc_hour: 7, minute: 0, duration_minutes: 60}
         - {instance_idx: 2, day: 10, utc_hour: 7, minute: 0, duration_minutes: 60}
         - {instance_idx: 3, day: 13, utc_hour: 7, minute: 0, duration_minutes: 60}
+      demo:
+        - {instance_idx: 1, day: 2, utc_hour: 7, minute: 0, duration_minutes: 60}
       eval:
         - {instance_idx: 1, day: 13, utc_hour: 7, minute: 0, duration_minutes: 60}
         - {instance_idx: 2, day: 23, utc_hour: 7, minute: 0, duration_minutes: 60}

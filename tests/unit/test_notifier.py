@@ -836,7 +836,8 @@ async def test_mailpit_e2e_integration(tmp_path: Path) -> None:
         smtp_port=1025,
         smtp_tls="none",
         mail_from="ase-alerts@ase.local",
-        mail_to="ops@ase.local",
+        # Địa chỉ nhận riêng cho lần chạy test: chỉ đếm/xoá mail của test, KHÔNG đụng mail demo
+        mail_to=f"e2e-{tmp_path.name}@ase.local",
     )
     service = NotifierService(
         settings=settings,
@@ -845,25 +846,29 @@ async def test_mailpit_e2e_integration(tmp_path: Path) -> None:
     )
 
     mailpit_base = "http://127.0.0.1:8025/api/v1"
-    async with httpx.AsyncClient() as client:
-        # Xoá hộp thư trước khi test
-        del_resp = await client.delete(f"{mailpit_base}/messages")
-        assert del_resp.status_code in (200, 204)
 
+    async def own_messages(client: httpx.AsyncClient) -> list[dict[str, object]]:
+        resp = await client.get(f"{mailpit_base}/messages", params={"limit": 500})
+        assert resp.status_code == 200
+        msgs: list[dict[str, object]] = resp.json()["messages"]
+        return [
+            m
+            for m in msgs
+            if any(t.get("Address") == settings.mail_to for t in m.get("To") or [])  # type: ignore[attr-defined]
+        ]
+
+    async with httpx.AsyncClient() as client:
         # Chạy demo live gửi thẳng tới Mailpit
         reports = await run_demo(live=True, settings=settings, clock=clock, service=service)
         assert len(reports) == 3
         for rep in reports:
             assert all(r.status == "SENT" for r in rep.results)
 
-        # Kiểm tra 3 email trong Mailpit
-        list_resp = await client.get(f"{mailpit_base}/messages")
-        assert list_resp.status_code == 200
-        data = list_resp.json()
-        assert data["total"] == 3
-        messages = data["messages"]
+        # Kiểm tra 3 email của chính test trong Mailpit
+        messages = await own_messages(client)
+        assert len(messages) == 3
         for msg in messages:
-            assert msg["Subject"].startswith("[ASE]")
+            assert str(msg["Subject"]).startswith("[ASE]")
 
         # Kiểm tra incident PH có GMT+8
         ph_found = False
@@ -880,8 +885,36 @@ async def test_mailpit_e2e_integration(tmp_path: Path) -> None:
         reports_dup = await run_demo(live=True, settings=settings, clock=clock, service=service)
         for rep_dup in reports_dup:
             assert all(r.status == "SKIPPED" for r in rep_dup.results)
-        list_resp2 = await client.get(f"{mailpit_base}/messages")
-        assert list_resp2.json()["total"] == 3
+        assert len(await own_messages(client)) == 3
 
-        # Dọn dẹp sau test
-        await client.delete(f"{mailpit_base}/messages")
+        # Dọn dẹp: chỉ xoá mail do test gửi, giữ nguyên mail demo trong hộp thư
+        ids = [m["ID"] for m in await own_messages(client)]
+        await client.request("DELETE", f"{mailpit_base}/messages", json={"IDs": ids})
+
+
+async def test_incidents_from_profile_point_to_real_sessions_and_events(tmp_path: Path) -> None:
+    """Incident mẫu cho demo phải trỏ tới phiên/event CÓ THẬT trong dữ liệu đang hiển thị."""
+    import orjson
+    import polars as pl
+
+    from ase.notifier.demo import incidents_from_profile
+    from ase.simulator.generator import generate
+
+    out = tmp_path / "smoke"
+    await generate("smoke", out)
+    incs = incidents_from_profile(out)
+    assert {i.category for i in incs} >= {Category.SYSTEM, Category.PAYMENT}  # smoke: deploy + P1
+
+    sessions = set(pl.read_parquet(out / "swap_sessions.parquet")["session_id"].to_list())
+    events = {
+        orjson.loads(line)["event_id"]
+        for line in (out / "ase.swap.events.jsonl").read_bytes().splitlines()
+    }
+    for inc in incs:
+        assert inc.incident_id.startswith("INC-DEMO-")
+        assert "MẪU" in inc.probable_cause
+        assert set(inc.session_ids) <= sessions
+        assert inc.evidence and set(inc.evidence) <= events  # SF9: evidence có thật
+        assert inc.first_seen_at <= inc.last_seen_at
+    p1 = [i for i in incs if i.severity is Severity.P1]
+    assert p1 and p1[0].error_code == "PAID_NOT_DELIVERED"

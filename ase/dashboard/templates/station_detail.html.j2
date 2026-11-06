@@ -1,95 +1,94 @@
 {% extends "base.html.j2" %}
+{% import "widgets.html.j2" as w %}
 {% block title %}Chi tiết trạm {{ data.station.station_id }} — ASE BSS NOC{% endblock %}
 {% block content %}
 {% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}
+{% set asof_sub = "Tại as_of " ~ meta.as_of.strftime('%H:%M %d/%m (UTC)') %}
 
-<section class="panel">
+<div class="panel" style="margin-bottom: 12px;">
   <div class="panel-header">
     <div>
-      <a href="/dashboard/stations?{{ q_base }}" class="back-link">← Danh sách trạm</a>
-      <h2>Trạm {{ data.station.station_id }} ({{ data.station.country }} · {{ data.station.timezone }} · {{ data.station.timezone_offset }})</h2>
+      <a href="/dashboard/stations?{{ q_base }}" class="btn-secondary" style="display: inline-block; margin-bottom: 6px;">← Danh sách trạm</a>
+      <h2 style="margin: 0; font-size: 20px;">Trạm {{ data.station.station_id }} ({{ data.station.country }} · {{ data.station.timezone }} · {{ data.station.timezone_offset }})</h2>
     </div>
     <span class="status-pill status-{{ data.station.status_color }}">
       {{ data.station.cabinets_online }}/{{ data.station.cabinets_total }} tủ online ·
-      Pin sẵn sàng: {{ data.station.ready_batteries }}/{{ data.station.total_slots }}
+      Pin sẵn sàng: {{ data.station.ready_batteries }}/{{ data.station.total_slots }} ({{ data.station.ready_battery_pct }}%)
     </span>
   </div>
-  <div class="legend-inline mb-12">
-    <span class="slot-badge slot-ready">Sẵn sàng (SOC &ge; 90%)</span>
-    <span class="slot-badge slot-charging">Đang sạc (SOC &lt; 90%)</span>
-    <span class="slot-badge slot-empty">Trống</span>
-    <span class="slot-badge slot-error">Lỗi cửa / cảm biến / khoang</span>
-    <span class="slot-badge slot-overheat">Quá nhiệt (&gt; 55°C)</span>
+  <div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 11.5px; margin-top: 8px;">
+    <span class="status-pill status-green">Sẵn sàng (SOC &ge; 90%)</span>
+    <span class="status-pill status-blue">Đang sạc (SOC &lt; 90%)</span>
+    <span class="status-pill" style="background:#f1f5f9; color:#64748b;">Trống</span>
+    <span class="status-pill status-red">Lỗi cửa / cảm biến / khoang</span>
+    <span class="status-pill status-orange">Quá nhiệt (&gt; 55°C)</span>
   </div>
+</div>
+
+<!-- Widget Nhiệt độ tủ của trạm (DASHBOARD_UI_PLAN §2.2) -->
+<section style="margin-bottom: 12px;">
+  {% call w.widget_card(id="widget-cabinet-temp", title="Nhiệt độ các tủ thuộc trạm " ~ data.station.station_id, subtitle=asof_sub ~ " – 1 giờ trước") %}
+    <div id="chart-cabinet-temperature" class="chart-box"></div>
+    <div id="cabinet-temp-legend-table"></div>
+  {% endcall %}
 </section>
 
 {% for cab in data.cabinets %}
-<section class="panel">
-  <div class="panel-header">
-    <h3>
-      Tủ <code>{{ cab.cabinet_id }}</code> ({{ cab.model_gen }})
+<section style="margin-bottom: 12px;">
+  {% call w.widget_card(id="widget-cab-" ~ cab.cabinet_id, title="Tủ " ~ cab.cabinet_id ~ " (" ~ cab.model_gen ~ ")", subtitle="Heartbeat cuối: " ~ (cab.last_heartbeat_local or "Chưa có") ~ " · Nhiệt độ max 24h: " ~ ((cab.max_temp_24h ~ "°C") if cab.max_temp_24h is not none else "—")) %}
+    <div style="margin-bottom: 8px;">
       {% if cab.online %}
         <span class="status-pill status-green">ONLINE</span>
       {% else %}
         <span class="status-pill status-red">OFFLINE / MẤT HEARTBEAT</span>
       {% endif %}
-    </h3>
-    <div class="note-text">
-      Heartbeat cuối: <code>{{ cab.last_heartbeat_local or "Chưa có" }}</code> ·
-      Nhiệt độ cực đại 24h: <strong>{{ (cab.max_temp_24h ~ "°C") if cab.max_temp_24h is not none else "—" }}</strong>
     </div>
-  </div>
 
-  <div class="slot-grid-12">
-    {% for slot in cab.slots %}
-    <div class="slot-cell slot-{{ slot.state_color }}" data-slot="{{ slot.slot_id }}">
-      <div class="slot-header">
-        <strong>Khoang {{ slot.slot_id }}</strong>
-        <span class="slot-state-tag">{{ slot.state_label }}</span>
+    <!-- Lưới 12 khoang (Pill style §2.2) -->
+    <div class="slot-grid">
+      {% for slot in cab.slots %}
+      <div class="slot-card slot-{{ slot.state_color }}" data-slot="{{ slot.slot_id }}">
+        <div class="slot-top-row">
+          <span class="slot-num">Khoang {{ slot.slot_id }}</span>
+          <span class="slot-state-pill">{{ slot.state_label }}</span>
+        </div>
+        <div class="slot-metrics">
+          <div>Cửa: <code>{{ slot.door_state }}</code> · Pin: <code>{{ "true" if slot.battery_detected else "false" }}</code></div>
+          <div>SOC: <strong>{{ (slot.soc ~ "%") if slot.soc is not none else "—" }}</strong> · Nhiệt: <strong>{{ (slot.temperature ~ "°C") if slot.temperature is not none else "—" }}</strong></div>
+          {% if slot.hw_error_code %}
+          <div style="color: var(--red); font-weight: 600;">HW: <code>{{ slot.hw_error_code }}</code></div>
+          {% endif %}
+          {% if slot.recent_error_code %}
+          <div style="color: var(--orange); font-weight: 600;">
+            Lỗi: <code>{{ slot.recent_error_code }}</code>
+            {% if slot.failed_24h > 0 %}({{ slot.failed_24h }} lần/24h){% endif %}
+          </div>
+          {% endif %}
+        </div>
       </div>
-      <div class="slot-kv"><span>Cửa (`door_state`):</span> <code>{{ slot.door_state }}</code></div>
-      <div class="slot-kv"><span>Có pin (`battery_detected`):</span> <code>{{ "true" if slot.battery_detected else "false" }}</code></div>
-      <div class="slot-kv"><span>SOC:</span> <strong>{{ (slot.soc ~ "%") if slot.soc is not none else "—" }}</strong></div>
-      <div class="slot-kv"><span>Nhiệt độ:</span> <strong>{{ (slot.temperature ~ "°C") if slot.temperature is not none else "—" }}</strong></div>
-      {% if slot.hw_error_code %}
-      <div class="slot-err">HW: <code>{{ slot.hw_error_code }}</code></div>
-      {% endif %}
-      {% if slot.recent_error_code %}
-      <div class="slot-err">
-        Lỗi: <code>{{ slot.recent_error_code }}</code>
-        {% if slot.recent_error_desc %}({{ slot.recent_error_desc }}){% endif %}
-        {% if slot.failed_24h > 0 %}· {{ slot.failed_24h }} phiên lỗi/24h{% endif %}
-      </div>
-      {% endif %}
-    </div>
-    {% endfor %}
-  </div>
-
-  <div class="hb-timeline-section mt-16">
-    <h4>Dòng thời gian Heartbeat 24 giờ gần nhất (màu đỏ = mất heartbeat / chập chờn)</h4>
-    <div class="hb-strip">
-      {% for b in cab.heartbeat_buckets_24h %}
-      <div
-        class="hb-seg hb-{{ b.status }}"
-        title="{{ b.label_local }}: {{ b.heartbeat_count }}/{{ b.expected_count }} nhịp ({{ b.status }})"
-      ></div>
       {% endfor %}
     </div>
-    {% if cab.heartbeat_gaps_24h %}
-    <div class="hb-gaps-note">
-      <strong>Phát hiện {{ cab.heartbeat_gaps_24h | length }} khoảng mất heartbeat (&ge; 120s) trong 24h:</strong>
-      {% for g in cab.heartbeat_gaps_24h[:6] %}
-        <span class="gap-pill">{{ g.start_local }} → {{ g.end_local }} ({{ "%.0f"|format(g.gap_seconds) }}s)</span>
-      {% endfor %}
-      {% if cab.heartbeat_gaps_24h | length > 6 %}
-        <span>… (+{{ (cab.heartbeat_gaps_24h | length) - 6 }} khoảng khác)</span>
+
+    <div style="margin-top: 14px; border-top: 1px solid #f1f5f9; padding-top: 10px;">
+      <h4 style="margin: 0 0 6px 0; font-size: 12px; color: var(--text-muted);">Dòng thời gian Heartbeat 24 giờ qua (Đỏ = mất heartbeat)</h4>
+      <div style="display: flex; gap: 2px; height: 14px; background: #e2e8f0; border-radius: 3px; padding: 1px; overflow: hidden;">
+        {% for b in cab.heartbeat_buckets_24h %}
+        <div
+          style="flex: 1; height: 100%; border-radius: 2px; background: {% if b.status == 'ok' %}var(--green){% elif b.status == 'intermittent' %}var(--orange){% else %}var(--red){% endif %};"
+          title="{{ b.label_local }}: {{ b.heartbeat_count }}/{{ b.expected_count }} nhịp ({{ b.status }})"
+        ></div>
+        {% endfor %}
+      </div>
+      {% if cab.heartbeat_gaps_24h %}
+      <div style="margin-top: 6px; font-size: 11.5px; color: var(--text-muted);">
+        <strong>Phát hiện {{ cab.heartbeat_gaps_24h | length }} khoảng mất heartbeat (&ge; 120s):</strong>
+        {% for g in cab.heartbeat_gaps_24h[:6] %}
+          <span class="status-pill status-red" style="margin: 2px;">{{ g.start_local }} → {{ g.end_local }} ({{ "%.0f"|format(g.gap_seconds) }}s)</span>
+        {% endfor %}
+      </div>
       {% endif %}
     </div>
-    {% else %}
-    <div class="note-text">Đủ nhịp heartbeat (1 phút/lần) trong 24 giờ qua.</div>
-    {% endif %}
-  </div>
+  {% endcall %}
 </section>
 {% endfor %}
 {% endblock %}
-

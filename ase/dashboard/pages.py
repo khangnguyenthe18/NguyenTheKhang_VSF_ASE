@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup
 from pydantic import BaseModel
 
 from ase.common.models import Step
@@ -40,12 +41,22 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 router = APIRouter(prefix="/dashboard", tags=["dashboard-pages"])
 
 
-def _to_safe_json(obj: object) -> str:
+def _to_safe_json(obj: object) -> Markup:
+    """JSON nhúng vào `<script type="application/json">`.
+
+    Trả `Markup` để Jinja2 autoescape KHÔNG đổi `"` thành `&#34;`: trình duyệt không giải mã entity
+    bên trong thẻ script, nên JSON bị escape sẽ làm `JSON.parse` lỗi và mọi widget trống.
+    An toàn nhờ mã hoá `<`, `>`, `&` thành `\\u003c`, `\\u003e`, `\\u0026`: vẫn là JSON hợp lệ,
+    dữ liệu untrusted (vd `</untrusted_data>`, `</script>`, `<!--`) không thể thoát khỏi thẻ script.
+    """
     if isinstance(obj, BaseModel):
         raw = json.dumps(obj.model_dump(mode="json"), ensure_ascii=False)
     else:
         raw = json.dumps(obj, ensure_ascii=False, default=str)
-    return raw.replace("</", "<\\/").replace("<!--", "<\\!--")
+    raw = raw.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+    # U+2028/U+2029 hợp lệ trong JSON nhưng một số engine JS cũ coi là xuống dòng
+    raw = raw.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    return Markup(raw)  # an toàn: đã tự mã hoá mọi ký tự nguy hiểm ở trên
 
 
 _env = Environment(
@@ -80,11 +91,13 @@ async def page_overview(
         notifier=resolve_notifier(request),
         profiles=profs,
     )
+    key = resolve_settings(request).vietmap_api_key
     return _render(
         "overview.html.j2",
         active_tab="overview",
         meta=payload.meta,
         data=payload,
+        vietmap_key=key.get_secret_value() if key is not None else "",
     )
 
 

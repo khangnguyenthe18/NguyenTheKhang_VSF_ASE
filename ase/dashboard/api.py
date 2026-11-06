@@ -19,26 +19,32 @@ from ase.dashboard.data import (
     read_notifier_sqlite,
 )
 from ase.dashboard.metrics import (
+    build_alarms_page,
     build_alerts_page,
     build_batteries_page,
+    build_cabinet_temperature_timeseries,
     build_ground_truth_page,
     build_incidents_placeholder,
     build_metrics_placeholder,
     build_overview,
     build_payments_page,
+    build_ready_batteries_timeseries,
     build_session_detail,
     build_sessions_page,
     build_station_detail,
     build_stations_list,
 )
 from ase.dashboard.models import (
+    AlarmsResponse,
     AlertsPageResponse,
     BatteriesPageResponse,
+    CabinetTemperatureTimeseriesResponse,
     GroundTruthPageResponse,
     IncidentsPlaceholderResponse,
     MetricsPlaceholderResponse,
     OverviewResponse,
     PaymentsPageResponse,
+    ReadyBatteriesTimeseriesResponse,
     SessionDetailResponse,
     SessionsPageResponse,
     StationDetailResponse,
@@ -104,6 +110,75 @@ async def api_overview(
     c_norm = normalize_country(country)
     data, profs = resolve_profile_data(request, profile)
     return build_overview(
+        data,
+        as_of=as_of,
+        country=c_norm,
+        settings=resolve_settings(request),
+        notifier=resolve_notifier(request),
+        profiles=profs,
+    )
+
+
+@router.get(
+    "/timeseries/cabinet-temperature",
+    response_model=CabinetTemperatureTimeseriesResponse,
+)
+async def api_cabinet_temperature_timeseries(
+    request: Request,
+    profile: str = "dev",
+    station_id: str | None = None,
+    hours: int = 1,
+    as_of: datetime | None = None,
+    country: str | None = None,
+) -> CabinetTemperatureTimeseriesResponse:
+    c_norm = normalize_country(country)
+    data, profs = resolve_profile_data(request, profile)
+    return build_cabinet_temperature_timeseries(
+        data,
+        station_id=station_id,
+        hours=hours,
+        as_of=as_of,
+        country=c_norm,
+        settings=resolve_settings(request),
+        profiles=profs,
+    )
+
+
+@router.get(
+    "/timeseries/ready-batteries",
+    response_model=ReadyBatteriesTimeseriesResponse,
+)
+async def api_ready_batteries_timeseries(
+    request: Request,
+    profile: str = "dev",
+    hours: int = 6,
+    step_minutes: int = 15,
+    as_of: datetime | None = None,
+    country: str | None = None,
+) -> ReadyBatteriesTimeseriesResponse:
+    c_norm = normalize_country(country)
+    data, profs = resolve_profile_data(request, profile)
+    return build_ready_batteries_timeseries(
+        data,
+        hours=hours,
+        step_minutes=step_minutes,
+        as_of=as_of,
+        country=c_norm,
+        settings=resolve_settings(request),
+        profiles=profs,
+    )
+
+
+@router.get("/alarms", response_model=AlarmsResponse)
+async def api_alarms(
+    request: Request,
+    profile: str = "dev",
+    as_of: datetime | None = None,
+    country: str | None = None,
+) -> AlarmsResponse:
+    c_norm = normalize_country(country)
+    data, profs = resolve_profile_data(request, profile)
+    return build_alarms_page(
         data,
         as_of=as_of,
         country=c_norm,

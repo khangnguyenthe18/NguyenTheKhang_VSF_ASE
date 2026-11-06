@@ -17,6 +17,15 @@ countries:
       - {name: "Hà Nội", timezone: Asia/Ho_Chi_Minh, lat: 21.0285, lon: 105.8542}
       - {name: "TP.HCM", timezone: Asia/Ho_Chi_Minh, lat: 10.7769, lon: 106.7009}
       - {name: "Đà Nẵng", timezone: Asia/Ho_Chi_Minh, lat: 16.0544, lon: 108.2022}
+      - {name: "Hải Phòng", timezone: Asia/Ho_Chi_Minh, lat: 20.8449, lon: 106.6881}
+      - {name: "Cần Thơ", timezone: Asia/Ho_Chi_Minh, lat: 10.0452, lon: 105.7469}
+      - {name: "Nha Trang", timezone: Asia/Ho_Chi_Minh, lat: 12.2388, lon: 109.1967}
+      - {name: "Huế", timezone: Asia/Ho_Chi_Minh, lat: 16.4637, lon: 107.5909}
+      - {name: "Vinh", timezone: Asia/Ho_Chi_Minh, lat: 18.6796, lon: 105.6813}
+      - {name: "Biên Hòa", timezone: Asia/Ho_Chi_Minh, lat: 10.9574, lon: 106.8427}
+      - {name: "Quy Nhơn", timezone: Asia/Ho_Chi_Minh, lat: 13.7829, lon: 109.2196}
+      - {name: "Hạ Long", timezone: Asia/Ho_Chi_Minh, lat: 20.9712, lon: 107.0448}
+      - {name: "Buôn Ma Thuột", timezone: Asia/Ho_Chi_Minh, lat: 12.6667, lon: 108.0500}
     payment_providers: [VN_WALLET_1, VN_WALLET_2, VN_CARD]
     pricing:
       swap_fee: 9000
@@ -34,6 +43,10 @@ countries:
     timezones: [Asia/Manila]
     cities:
       - {name: "Manila", timezone: Asia/Manila, lat: 14.5995, lon: 120.9842}
+      - {name: "Quezon City", timezone: Asia/Manila, lat: 14.6760, lon: 121.0437}
+      - {name: "Cebu City", timezone: Asia/Manila, lat: 10.3157, lon: 123.8854}
+      - {name: "Davao City", timezone: Asia/Manila, lat: 7.1907, lon: 125.4553}
+      - {name: "Baguio", timezone: Asia/Manila, lat: 16.4023, lon: 120.5960}
     payment_providers: [PH_WALLET_1, PH_CARD]
     pricing:
       swap_fee: 35
@@ -49,6 +62,9 @@ countries:
     cities:
       - {name: "Jakarta", timezone: Asia/Jakarta, lat: -6.2088, lon: 106.8456}
       - {name: "Makassar", timezone: Asia/Makassar, lat: -5.1477, lon: 119.4327}
+      - {name: "Bandung", timezone: Asia/Jakarta, lat: -6.9175, lon: 107.6191}
+      - {name: "Surabaya", timezone: Asia/Jakarta, lat: -7.2575, lon: 112.7521}
+      - {name: "Denpasar", timezone: Asia/Makassar, lat: -8.6705, lon: 115.2126}
     payment_providers: [ID_WALLET_1, ID_CARD]
     pricing:
       swap_fee: 6000

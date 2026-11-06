@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}ASE BSS NOC Dashboard{% endblock %}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://unpkg.com/@vietmap/vietmap-gl-js@6.0.1/dist/vietmap-gl.css">
   <link rel="stylesheet" href="/static/dashboard/dashboard.css">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+  {# Thứ tự bắt buộc theo tài liệu Vietmap: Leaflet -> VIETMAP GL JS -> plugin #}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@vietmap/vietmap-gl-js@6.0.1/dist/vietmap-gl.js"></script>
+  <script src="https://unpkg.com/@vietmap/vietmap-gl-leaflet@0.1.0/leaflet-vietmap-gl.js"></script>
 </head>
 <body>
   {% set q_base = "profile=" ~ (meta.profile | urlencode) ~ ("&country=" ~ (meta.country | urlencode) if meta.country else "") ~ "&as_of=" ~ (meta.as_of.isoformat() | urlencode) %}

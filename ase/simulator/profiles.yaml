@@ -79,6 +79,15 @@ profiles:
     sessions_per_day: 1000
     stations: {VN: 2, PH: 1, ID: 2}    # ID: WIB + WITA (xoay vòng timezone)
     split: {baseline_days: 7, after: dev}
+  demo:
+    # Chỉ để trình diễn dashboard/luồng cảnh báo (nhiều trạm, 3 ngày). KHÔNG dùng để đo SF:
+    # số đo luôn lấy từ dev/eval. Không có tập test, không ảnh hưởng tập test đã đóng băng.
+    seed: 3042
+    start_date: 2026-10-30
+    days: 3
+    sessions_per_day: 6000
+    stations: {VN: 28, PH: 7, ID: 5}
+    split: {baseline_days: 0, after: demo}
   eval:
     seed: 2042
     test_seed: 9042

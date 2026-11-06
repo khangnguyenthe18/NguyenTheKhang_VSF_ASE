@@ -1,0 +1,29 @@
+{# Macro dùng chung cho widget card (DASHBOARD_UI_PLAN §3) #}
+{% macro widget_card(id="", title="", subtitle="", extra_classes="", actions="") %}
+<div class="widget-card {{ extra_classes }}" {% if id %}id="{{ id }}"{% endif %}>
+  <div class="widget-header">
+    <div class="widget-title-group">
+      <h3 class="widget-title">{{ title }}</h3>
+      {% if subtitle %}
+      <div class="widget-subtitle">{{ subtitle }}</div>
+      {% endif %}
+    </div>
+    <div class="widget-actions">
+      {{ actions }}
+      <button type="button" class="btn-widget-icon btn-widget-search" title="Tìm kiếm" aria-label="Tìm kiếm">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      </button>
+      <button type="button" class="btn-widget-icon btn-widget-columns" title="Tùy chọn cột" aria-label="Tùy chọn">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+      </button>
+      <button type="button" class="btn-widget-icon btn-widget-fullscreen" title="Phóng to toàn màn hình" aria-label="Toàn màn hình">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+      </button>
+    </div>
+  </div>
+  <div class="widget-body">
+    {{ caller() }}
+  </div>
+</div>
+{% endmacro %}
+
