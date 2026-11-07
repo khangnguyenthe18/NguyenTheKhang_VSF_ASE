@@ -1,0 +1,59 @@
+# Cấu hình detector, correlator, tầng trường (T0–T3) và lịch gửi thông báo (DETECTOR_PLAN §2, §4, §6).
+# Không hardcode các tham số này trong code; luôn đọc qua `default_knowledge().detector`.
+
+correlator:
+  window_minutes: 5
+  user_spike_window_minutes: 15
+  user_spike_min_sessions: 10
+  cluster_confidence_threshold: 0.8
+  max_evidence_ids: 5
+
+classifier:
+  heartbeat_gap_seconds: 120
+  paid_not_delivered_confidence: 0.98
+  catalog_confidence: 0.95
+  inferred_confidence: 0.70
+  unknown_confidence: 0.30
+
+notify:
+  batch_interval_minutes: 15
+  max_rows_mail: 200
+  daily_report_local_time: "18:00"
+  daily_report_timezone: "Asia/Ho_Chi_Minh"
+
+# Tầng trường dữ liệu (CLAUDE.md §10.1).
+field_tiers:
+  T0:
+    - session_id
+    - occurred_at
+    - step
+    - status
+    - station_id
+    - country
+    - timezone
+  T1:
+    - error_code
+    - cabinet_id
+    - slot_id
+    - payment.captured
+    - payment_provider
+  T2:
+    - app_version
+    - battery_id
+    - lot_id
+    - soc
+    - soh
+    - user_id
+    - latency_ms
+  T3:
+    - door_state
+    - battery_detected
+    - heartbeat_at
+    - temperature
+    - hw_error_code
+
+field_presets:
+  T0: [T0]
+  T0+T1: [T0, T1]
+  T0+T1+T2: [T0, T1, T2]
+  ALL: [T0, T1, T2, T3]

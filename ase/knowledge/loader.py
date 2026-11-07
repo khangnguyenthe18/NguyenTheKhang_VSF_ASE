@@ -252,6 +252,77 @@ class Countries(_Strict):
         raise KeyError(provider)
 
 
+# --- detector.yaml ----------------------------------------------------------
+
+
+class CorrelatorSpec(_Strict):
+    window_minutes: int = Field(gt=0)
+    user_spike_window_minutes: int = Field(gt=0)
+    user_spike_min_sessions: int = Field(gt=0)
+    cluster_confidence_threshold: float = Field(ge=0.0, le=1.0)
+    max_evidence_ids: int = Field(ge=1, le=5)
+
+
+class ClassifierSpec(_Strict):
+    heartbeat_gap_seconds: int = Field(gt=0)
+    paid_not_delivered_confidence: float = Field(ge=0.0, le=1.0)
+    catalog_confidence: float = Field(ge=0.0, le=1.0)
+    inferred_confidence: float = Field(ge=0.0, le=1.0)
+    unknown_confidence: float = Field(ge=0.0, le=1.0)
+
+
+class NotifySpec(_Strict):
+    batch_interval_minutes: int = Field(gt=0)
+    max_rows_mail: int = Field(gt=0)
+    daily_report_local_time: str
+    daily_report_timezone: str
+
+    @model_validator(mode="after")
+    def _validate_tz_and_time(self) -> NotifySpec:
+        ZoneInfo(self.daily_report_timezone)
+        parts = self.daily_report_local_time.split(":")
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            raise ValueError(
+                f"daily_report_local_time phải có dạng HH:MM: {self.daily_report_local_time}"
+            )
+        h, m = int(parts[0]), int(parts[1])
+        if not (0 <= h < 24 and 0 <= m < 60):
+            raise ValueError(
+                f"daily_report_local_time ngoài phạm vi: {self.daily_report_local_time}"
+            )
+        return self
+
+
+class DetectorSpec(_Strict):
+    correlator: CorrelatorSpec
+    classifier: ClassifierSpec
+    notify: NotifySpec
+    field_tiers: dict[str, list[str]]
+    field_presets: dict[str, list[str]]
+
+    @model_validator(mode="after")
+    def _validate_presets(self) -> DetectorSpec:
+        required_presets = {"T0", "T0+T1", "T0+T1+T2", "ALL"}
+        missing_presets = required_presets - set(self.field_presets)
+        if missing_presets:
+            raise ValueError(f"field_presets thiếu preset bắt buộc: {sorted(missing_presets)}")
+        for preset, tiers in self.field_presets.items():
+            unknown = set(tiers) - set(self.field_tiers)
+            if unknown:
+                raise ValueError(
+                    f"preset {preset} tham chiếu tầng không tồn tại: {sorted(unknown)}"
+                )
+        return self
+
+    def fields_for_preset(self, preset: str) -> frozenset[str]:
+        if preset not in self.field_presets:
+            raise KeyError(f"unknown field preset: {preset}")
+        result: set[str] = set()
+        for tier in self.field_presets[preset]:
+            result.update(self.field_tiers[tier])
+        return frozenset(result)
+
+
 # --- bundle -----------------------------------------------------------------
 
 
@@ -260,14 +331,17 @@ class Knowledge(_Strict):
     error_catalog: ErrorCatalog
     routing: Routing
     countries: Countries
+    detector: DetectorSpec
 
 
 def load_knowledge(directory: Path = KNOWLEDGE_DIR) -> Knowledge:
+    detector_dir = directory if (directory / "detector.yaml").exists() else KNOWLEDGE_DIR
     return Knowledge(
         state_machine=StateMachine.model_validate(_load_yaml("state_machine.yaml", directory)),
         error_catalog=ErrorCatalog.model_validate(_load_yaml("error_catalog.yaml", directory)),
         routing=Routing.model_validate(_load_yaml("routing.yaml", directory)),
         countries=Countries.model_validate(_load_yaml("countries.yaml", directory)),
+        detector=DetectorSpec.model_validate(_load_yaml("detector.yaml", detector_dir)),
     )
 
 
