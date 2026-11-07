@@ -9,9 +9,7 @@
 from __future__ import annotations
 
 import asyncio
-import heapq
 from collections.abc import AsyncIterator
-from datetime import datetime
 from typing import Any
 
 import structlog
@@ -19,7 +17,6 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from ase.common.config import Settings, get_settings
 from ase.common.models import CabinetTelemetry, SwapEvent
-from ase.common.time import ensure_utc
 from ase.streaming.codec import decode_event, encode_event, encode_telemetry
 
 log = structlog.get_logger(__name__)
@@ -79,35 +76,13 @@ class KafkaSource:
                     batches: dict[Any, list[Any]] = await getmany_fn(timeout_ms=timeout_ms)
                     if not batches or not any(batches.values()):
                         break
-                    # Giữ nguyên thứ tự offset trong từng partition, chỉ trộn giữa các partition
-                    # có sẵn trong đợt fetch để không xả cạn 1 partition trước partition khác.
-                    part_queues: list[list[SwapEvent]] = []
+                    # Đúng thứ tự consumer nhận: theo offset trong từng partition, các partition
+                    # nối tiếp nhau như aiokafka trả về. Không sắp xếp lại theo occurred_at.
                     for records in batches.values():
-                        q: list[SwapEvent] = []
                         for msg in records:
                             ev = self._decode_raw(getattr(msg, "value", msg))
                             if ev is not None:
-                                q.append(ev)
-                        if q:
-                            part_queues.append(q)
-                    if len(part_queues) == 1:
-                        for ev in part_queues[0]:
-                            yield ev
-                    elif len(part_queues) > 1:
-                        heap: list[tuple[datetime, int, int, SwapEvent]] = []
-                        for p_idx, q in enumerate(part_queues):
-                            heapq.heappush(heap, (ensure_utc(q[0].occurred_at), p_idx, 0, q[0]))
-                        while heap:
-                            _, p_idx, r_idx, ev = heapq.heappop(heap)
-                            yield ev
-                            nxt_idx = r_idx + 1
-                            q = part_queues[p_idx]
-                            if nxt_idx < len(q):
-                                nxt_ev = q[nxt_idx]
-                                heapq.heappush(
-                                    heap,
-                                    (ensure_utc(nxt_ev.occurred_at), p_idx, nxt_idx, nxt_ev),
-                                )
+                                yield ev
                 return
 
             aiter = consumer.__aiter__()
