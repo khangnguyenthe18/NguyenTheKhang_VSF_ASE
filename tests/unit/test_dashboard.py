@@ -1034,6 +1034,9 @@ def test_html_widget_containers_and_no_inner_html_in_dashboard_js(
     )
 
 
+# --- 7. Hồi quy: page-data an toàn, bản đồ Vietmap (khôi phục) ----------------------------
+
+
 def test_page_data_json_is_parseable_and_cannot_break_out_of_script(
     smoke_env: tuple[Settings, Path],
 ) -> None:
@@ -1088,3 +1091,26 @@ def test_map_uses_vietmap_not_osm_and_key_only_from_settings(
         TestClient(create_app(db_path=db_path, settings=keyed)).get("/dashboard?profile=smoke").text
     )
     assert 'data-vietmap-key="k&#34;&lt;x&gt;"' in html2  # key được escape trong thuộc tính
+
+
+def test_vinfast_bss_api_returns_43298_cabinets(smoke_env: tuple[Settings, Path]) -> None:
+    gz_path = Path(__file__).resolve().parents[2] / "ase/dashboard/static/vinfast_bss.json.gz"
+    if not gz_path.exists():
+        pytest.skip(
+            "chưa có ase/dashboard/static/vinfast_bss.json.gz (dữ liệu ngoài, không commit)"
+        )
+    settings, db_path = smoke_env
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    resp = client.get("/api/dashboard/vinfast-bss")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert isinstance(rows, list)
+    assert len(rows) == 43297  # 43.298 trừ tủ sai toạ độ B.TNG10178
+    first = rows[0]
+    assert len(first) == 5
+    lat, lon, code, name, address = first
+    assert isinstance(lat, float) and 8.0 <= lat <= 24.0
+    assert isinstance(lon, float) and 102.0 <= lon <= 110.0
+    assert isinstance(code, str) and code.startswith("B.")
+    assert isinstance(name, str) and len(name) > 0
+    assert isinstance(address, str)

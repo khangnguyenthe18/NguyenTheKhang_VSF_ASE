@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import functools
+import gzip
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ase.common.config import Settings, get_settings
 from ase.common.models import Step
@@ -388,4 +390,37 @@ async def api_ground_truth(
         as_of=as_of,
         country=c_norm,
         profiles=profs,
+    )
+
+
+_VINFAST_BSS_GZ_PATH = Path(__file__).resolve().parent / "static" / "vinfast_bss.json.gz"
+
+
+@functools.lru_cache(maxsize=1)
+def _load_vinfast_bss_payloads() -> tuple[bytes, bytes]:
+    gz_bytes = _VINFAST_BSS_GZ_PATH.read_bytes()
+    raw_bytes = gzip.decompress(gz_bytes)
+    return gz_bytes, raw_bytes
+
+
+@router.get("/vinfast-bss")
+async def api_vinfast_bss(request: Request) -> Response:
+    """Trả danh sách 43.298 tọa độ Tủ đổi pin thực tế của VinFast `[lat, lon, code, name, addr]`."""
+    if not _VINFAST_BSS_GZ_PATH.exists():
+        raise HTTPException(status_code=404, detail="Chưa có dữ liệu vinfast_bss.json.gz")
+    gz_bytes, raw_bytes = _load_vinfast_bss_payloads()
+    accept_enc = request.headers.get("accept-encoding", "")
+    if "gzip" in accept_enc.lower():
+        return Response(
+            content=gz_bytes,
+            media_type="application/json",
+            headers={
+                "Content-Encoding": "gzip",
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+    return Response(
+        content=raw_bytes,
+        media_type="application/json",
+        headers={"Cache-Control": "public, max-age=3600"},
     )

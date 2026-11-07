@@ -28,26 +28,6 @@
     }
   }
 
-  /* Định dạng mốc thời gian (ms UTC) theo múi giờ IANA cho trục biểu đồ. Không dùng giờ máy trình duyệt. */
-  function formatTimeInTz(ms, tz, withDate) {
-    var opts = { timeZone: tz || "UTC", hour: "2-digit", minute: "2-digit", hour12: false };
-    if (withDate) { opts.day = "2-digit"; opts.month = "2-digit"; }
-    try {
-      return new Intl.DateTimeFormat("vi-VN", opts).format(new Date(ms));
-    } catch (_e) {
-      return new Date(ms).toISOString().slice(11, 16);
-    }
-  }
-
-  /* Dùng lại instance ECharts sẵn có trên phần tử (tránh init chồng khi vẽ lại). */
-  function getChart(el) {
-    var existing = echarts.getInstanceByDom(el);
-    if (existing) return existing;
-    var chart = echarts.init(el);
-    activeEchartsInstances.push(chart);
-    return chart;
-  }
-
   function initFilterControls(_pageData) {
     var slider = document.getElementById("asof-slider");
     var input = document.getElementById("filter-asof");
@@ -99,21 +79,21 @@
         if (card.classList.contains("is-fullscreen")) {
           card.classList.remove("is-fullscreen");
           if (document.fullscreenElement) {
-            document.exitFullscreen().catch(function () {});
+            document.exitFullscreen().catch(function () { });
           }
         } else {
           card.classList.add("is-fullscreen");
           if (card.requestFullscreen) {
-            card.requestFullscreen().catch(function () {});
+            card.requestFullscreen().catch(function () { });
           }
         }
 
         setTimeout(function () {
           activeEchartsInstances.forEach(function (c) {
-            try { c.resize(); } catch (_e) {}
+            try { c.resize(); } catch (_e) { }
           });
           if (globalLeafletMap) {
-            try { globalLeafletMap.invalidateSize(); } catch (_e) {}
+            try { globalLeafletMap.invalidateSize(); } catch (_e) { }
           }
         }, 150);
       });
@@ -127,20 +107,20 @@
       }
       setTimeout(function () {
         activeEchartsInstances.forEach(function (c) {
-          try { c.resize(); } catch (_e) {}
+          try { c.resize(); } catch (_e) { }
         });
         if (globalLeafletMap) {
-          try { globalLeafletMap.invalidateSize(); } catch (_e) {}
+          try { globalLeafletMap.invalidateSize(); } catch (_e) { }
         }
       }, 100);
     });
 
     window.addEventListener("resize", function () {
       activeEchartsInstances.forEach(function (c) {
-        try { c.resize(); } catch (_e) {}
+        try { c.resize(); } catch (_e) { }
       });
       if (globalLeafletMap) {
-        try { globalLeafletMap.invalidateSize(); } catch (_e) {}
+        try { globalLeafletMap.invalidateSize(); } catch (_e) { }
       }
     });
   }
@@ -407,48 +387,66 @@
     };
   }
 
-  /* --- Station Map with Pill Markers (DASHBOARD_UI_PLAN §1) ---------------- */
+  /* --- VinFast Battery Swap Cabinet Map (43.298 tủ thực tế, Canvas layer) -- */
 
-  function buildStationPopupNode(st, meta) {
+  function buildVinFastBssPopupNode(row) {
+    // row = [lat, lon, code, name, address]
+    var lat = row[0];
+    var lon = row[1];
+    var code = row[2] || "—";
+    var name = row[3] || "Tủ đổi pin VinFast";
+    var address = row[4] || "—";
+
     var wrap = document.createElement("div");
+
+    var badgeRow = document.createElement("div");
+    badgeRow.style.marginBottom = "4px";
+    var pill = document.createElement("span");
+    pill.className = "status-pill status-blue";
+    pill.textContent = "Tủ đổi pin · " + code;
+    badgeRow.appendChild(pill);
+    wrap.appendChild(badgeRow);
+
     var title = document.createElement("strong");
-    title.textContent = st.station_id + " (" + st.country + " · " + st.timezone_offset + ")";
+    title.style.display = "block";
+    title.style.fontSize = "13px";
+    title.style.marginBottom = "4px";
+    title.textContent = name;
     wrap.appendChild(title);
 
-    var lines = [
-      "Giờ địa phương: " + st.as_of_local,
-      "Tủ online: " + st.cabinets_online + "/" + st.cabinets_total,
-      "Pin sẵn sàng: " + st.ready_batteries + "/" + st.total_slots + " (" + (st.ready_battery_pct || 0) + "%)",
-      "Nhiệt độ max: " + (st.max_temp_c !== null && st.max_temp_c !== undefined ? st.max_temp_c + "°C" : "—"),
-      "Lỗi hôm nay: " + st.failed_today + "/" + st.swaps_today + " (" + (st.fail_rate_today * 100).toFixed(1) + "%)"
-    ];
-    lines.forEach(function (txt) {
-      var p = document.createElement("div");
-      p.textContent = txt;
-      wrap.appendChild(p);
-    });
+    var addrLine = document.createElement("div");
+    addrLine.textContent = "Địa chỉ: " + address;
+    wrap.appendChild(addrLine);
+
+    var coordLine = document.createElement("div");
+    coordLine.style.color = "#64748b";
+    coordLine.style.marginTop = "2px";
+    coordLine.textContent = "Tọa độ: " + lat + ", " + lon;
+    wrap.appendChild(coordLine);
 
     var link = document.createElement("a");
-    var q = "?profile=" + encodeURIComponent(meta.profile) + "&as_of=" + encodeURIComponent(meta.as_of);
-    if (meta.country) q += "&country=" + encodeURIComponent(meta.country);
-    link.href = "/dashboard/stations/" + encodeURIComponent(st.station_id) + q;
-    link.textContent = "Xem chi tiết trạm →";
+    link.href = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(lat + "," + lon);
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Chỉ đường Google Maps →";
     link.style.display = "inline-block";
     link.style.marginTop = "6px";
     link.style.fontWeight = "600";
     wrap.appendChild(link);
+
     return wrap;
   }
 
-  function initStationMap(stations, meta) {
+  function initStationMap(_stations, _meta) {
     var mapEl = document.getElementById("stations-map");
-    if (!mapEl || typeof L === "undefined" || !Array.isArray(stations)) return;
+    if (!mapEl || typeof L === "undefined") return;
 
     if (globalLeafletMap) {
-      try { globalLeafletMap.remove(); } catch (_e) {}
+      try { globalLeafletMap.remove(); } catch (_e) { }
     }
 
-    var map = L.map(mapEl, { minZoom: 1 }).setView([12.0, 110.0], 5);
+    var vnBounds = [[8.4, 102.1], [23.4, 109.5]];
+    var map = L.map(mapEl, { minZoom: 4, preferCanvas: true }).setView([16.0, 106.5], 5);
     globalLeafletMap = map;
 
     // Nền bản đồ Vietmap (vector, qua plugin @vietmap/vietmap-gl-leaflet). Không dùng OSM.
@@ -463,58 +461,340 @@
       note.className = "map-key-missing";
       note.textContent = vmKey
         ? "Không tải được thư viện bản đồ Vietmap (kiểm tra kết nối mạng)."
-        : "Chưa cấu hình ASE_VIETMAP_API_KEY trong .env: chỉ hiển thị vị trí trạm, không có nền bản đồ.";
+        : "Chưa cấu hình ASE_VIETMAP_API_KEY trong .env: chỉ hiển thị vị trí tủ đổi pin, không có nền bản đồ.";
       mapEl.appendChild(note);
     }
 
-    var bounds = [];
-    stations.forEach(function (st) {
-      var markerColorClass = "marker-" + (st.status_color || "green");
-      var pillHtml = '<div class="station-pill-marker ' + markerColorClass + '">' +
-        '<span class="marker-dot"></span>' +
-        '<span class="marker-label">' + escapeHTML(st.station_id) + '</span>' +
-        '</div>';
+    // Thanh công cụ hiển thị tổng số tủ đổi pin + tìm kiếm nhanh trên bản đồ
+    var toolbar = document.createElement("div");
+    toolbar.className = "bss-map-toolbar";
+    L.DomEvent.disableClickPropagation(toolbar);
+    L.DomEvent.disableScrollPropagation(toolbar);
 
-      var customIcon = L.divIcon({
-        className: "station-div-icon",
-        html: pillHtml,
-        iconSize: [0, 0],
-        iconAnchor: [0, 0]
-      });
+    var countBadge = document.createElement("span");
+    countBadge.className = "bss-count-badge";
+    countBadge.textContent = "Đang tải tủ đổi pin VinFast...";
+    toolbar.appendChild(countBadge);
 
-      var marker = L.marker([st.lat, st.lon], { icon: customIcon, title: st.station_id }).addTo(map);
-      marker.bindPopup(buildStationPopupNode(st, meta));
-      bounds.push([st.lat, st.lon]);
-    });
+    var searchInput = document.createElement("input");
+    searchInput.type = "text";
+    searchInput.className = "bss-search-input";
+    searchInput.placeholder = "Tìm mã tủ B.xxx, tên, địa chỉ...";
+    toolbar.appendChild(searchInput);
+    mapEl.appendChild(toolbar);
 
-    // Nhiều trạm gần nhau: zoom xa chỉ hiện chấm màu, zoom gần (>= 8) mới hiện nhãn tên trạm
-    function toggleLabels() {
-      if (map.getZoom() >= 8) {
-        mapEl.classList.remove("map-zoom-low");
-      } else {
-        mapEl.classList.add("map-zoom-low");
+    var widgetCard = document.getElementById("widget-station-map");
+    if (widgetCard) {
+      var searchBtn = widgetCard.querySelector(".btn-widget-search");
+      if (searchBtn) {
+        searchBtn.addEventListener("click", function () {
+          searchInput.focus();
+          searchInput.select();
+        });
       }
     }
-    map.on("zoomend", toggleLabels);
 
-    function fitAll() {
-      // Leaflet đo kích thước khung lúc khởi tạo; nếu lưới CSS chưa dàn xong thì kích thước = 0,
-      // bản đồ không tải tile và fitBounds tính sai. Đo lại rồi mới zoom vừa mọi trạm.
-      map.invalidateSize();
-      if (bounds.length === 1) {
-        map.setView(bounds[0], 11, { animate: false });
-      } else if (bounds.length > 1) {
-        map.fitBounds(bounds, { padding: [40, 40], animate: false });
+    // Lớp Canvas hiệu năng cao vẽ 43.298 tủ đổi pin
+    var canvas = document.createElement("canvas");
+    canvas.className = "vinfast-bss-canvas";
+    mapEl.appendChild(canvas);
+
+    var allRows = [];
+    var filteredRows = [];
+    var hitTargets = [];
+    var rafPending = false;
+
+    function scheduleRender() {
+      if (rafPending) return;
+      rafPending = true;
+      window.requestAnimationFrame(function () {
+        rafPending = false;
+        renderBssCanvas();
+      });
+    }
+
+    function renderBssCanvas() {
+      var width = mapEl.clientWidth;
+      var height = mapEl.clientHeight;
+      if (width <= 0 || height <= 0) return;
+
+      var dpr = window.devicePixelRatio || 1;
+      if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
       }
-      toggleLabels();
+
+      var ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+
+      hitTargets = [];
+      if (!filteredRows.length) return;
+
+      var b = map.getBounds();
+      var south = b.getSouth() - 0.02;
+      var north = b.getNorth() + 0.02;
+      var west = b.getWest() - 0.02;
+      var east = b.getEast() + 0.02;
+      var zoom = map.getZoom();
+
+      // Khi zoom xa (< 13), gom cụm theo lưới pixel để hiển thị mượt và rõ mật độ tủ
+      if (zoom < 13 && filteredRows.length > 250) {
+        var cellSize = zoom <= 6 ? 26 : (zoom <= 8 ? 22 : (zoom <= 10 ? 18 : 14));
+        var grid = Object.create(null);
+
+        for (var i = 0; i < filteredRows.length; i++) {
+          var r = filteredRows[i];
+          var lat = r[0];
+          var lon = r[1];
+          if (lat < south || lat > north || lon < west || lon > east) continue;
+          var pt = map.latLngToContainerPoint([lat, lon]);
+          if (pt.x < -20 || pt.x > width + 20 || pt.y < -20 || pt.y > height + 20) continue;
+
+          var gx = Math.floor(pt.x / cellSize);
+          var gy = Math.floor(pt.y / cellSize);
+          var key = gx + ":" + gy;
+          var cell = grid[key];
+          if (!cell) {
+            grid[key] = {
+              sumX: pt.x,
+              sumY: pt.y,
+              sumLat: lat,
+              sumLon: lon,
+              count: 1,
+              row: r
+            };
+          } else {
+            cell.sumX += pt.x;
+            cell.sumY += pt.y;
+            cell.sumLat += lat;
+            cell.sumLon += lon;
+            cell.count += 1;
+          }
+        }
+
+        var keys = Object.keys(grid);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = "bold 9.5px Inter, system-ui, sans-serif";
+
+        for (var k = 0; k < keys.length; k++) {
+          var c = grid[keys[k]];
+          var cx = c.sumX / c.count;
+          var cy = c.sumY / c.count;
+          if (c.count === 1) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, 5.5, 0, Math.PI * 2);
+            ctx.fillStyle = "#1464f4";
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = "#ffffff";
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, 1.8, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffffff";
+            ctx.fill();
+
+            hitTargets.push({ x: cx, y: cy, radius: 9, count: 1, row: c.row });
+          } else {
+            var rad = Math.min(15, 7.5 + Math.log10(c.count) * 3.2);
+            ctx.beginPath();
+            ctx.arc(cx, cy, rad + 2, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(20, 100, 244, 0.22)";
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+            ctx.fillStyle = "#1464f4";
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = "#ffffff";
+            ctx.stroke();
+
+            if (zoom >= 7 || c.count >= 50) {
+              var label = c.count >= 1000 ? (c.count / 1000).toFixed(1) + "k" : String(c.count);
+              ctx.fillStyle = "#ffffff";
+              ctx.fillText(label, cx, cy);
+            }
+
+            hitTargets.push({
+              x: cx,
+              y: cy,
+              radius: rad + 4,
+              count: c.count,
+              lat: c.sumLat / c.count,
+              lon: c.sumLon / c.count,
+              row: c.row
+            });
+          }
+        }
+      } else {
+        ctx.font = "bold 10.5px Inter, system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+
+        for (var j = 0; j < filteredRows.length; j++) {
+          var row = filteredRows[j];
+          var rLat = row[0];
+          var rLon = row[1];
+          if (rLat < south || rLat > north || rLon < west || rLon > east) continue;
+          var p = map.latLngToContainerPoint([rLat, rLon]);
+          if (p.x < -20 || p.x > width + 20 || p.y < -20 || p.y > height + 20) continue;
+
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 6.5, 0, Math.PI * 2);
+          ctx.fillStyle = "#1464f4";
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2.2, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+
+          if (zoom >= 15 && row[2]) {
+            ctx.fillStyle = "#0f172a";
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+            ctx.lineWidth = 3;
+            ctx.strokeText(row[2], p.x + 9, p.y);
+            ctx.fillText(row[2], p.x + 9, p.y);
+          }
+
+          hitTargets.push({ x: p.x, y: p.y, radius: 11, count: 1, row: row });
+        }
+      }
+    }
+
+    function findHitTarget(containerPoint) {
+      var best = null;
+      var bestDistSq = Infinity;
+      for (var i = 0; i < hitTargets.length; i++) {
+        var t = hitTargets[i];
+        var dx = containerPoint.x - t.x;
+        var dy = containerPoint.y - t.y;
+        var dSq = dx * dx + dy * dy;
+        var maxR = t.radius + 4;
+        if (dSq <= maxR * maxR && dSq < bestDistSq) {
+          bestDistSq = dSq;
+          best = t;
+        }
+      }
+      return best;
+    }
+
+    map.on("click", function (ev) {
+      if (!ev.containerPoint) return;
+      var hit = findHitTarget(ev.containerPoint);
+      if (!hit) return;
+      if (hit.count > 1 && map.getZoom() < 15) {
+        map.setView([hit.lat, hit.lon], Math.min(map.getZoom() + 3, 16));
+      } else if (hit.row) {
+        L.popup()
+          .setLatLng([hit.row[0], hit.row[1]])
+          .setContent(buildVinFastBssPopupNode(hit.row))
+          .openOn(map);
+      }
+    });
+
+    map.on("mousemove", function (ev) {
+      if (!ev.containerPoint) return;
+      var hit = findHitTarget(ev.containerPoint);
+      mapEl.style.cursor = hit ? "pointer" : "";
+    });
+
+    map.on("move moveend zoomend viewreset resize", scheduleRender);
+
+    function applyBssFilter(zoomToMatches) {
+      var q = searchInput.value.trim().toLowerCase();
+      if (!q) {
+        filteredRows = allRows;
+        countBadge.textContent = allRows.length.toLocaleString("vi-VN") + " Tủ đổi pin VinFast";
+      } else {
+        filteredRows = allRows.filter(function (r) {
+          return (
+            (r[2] && r[2].toLowerCase().indexOf(q) >= 0) ||
+            (r[3] && r[3].toLowerCase().indexOf(q) >= 0) ||
+            (r[4] && r[4].toLowerCase().indexOf(q) >= 0)
+          );
+        });
+        countBadge.textContent =
+          filteredRows.length.toLocaleString("vi-VN") +
+          " / " +
+          allRows.length.toLocaleString("vi-VN") +
+          " tủ";
+        if (zoomToMatches && filteredRows.length > 0) {
+          if (filteredRows.length === 1) {
+            map.setView([filteredRows[0][0], filteredRows[0][1]], 16);
+            L.popup()
+              .setLatLng([filteredRows[0][0], filteredRows[0][1]])
+              .setContent(buildVinFastBssPopupNode(filteredRows[0]))
+              .openOn(map);
+          } else {
+            var minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+            for (var i = 0; i < filteredRows.length; i++) {
+              var rl = filteredRows[i][0];
+              var rg = filteredRows[i][1];
+              if (rl < minLat) minLat = rl;
+              if (rl > maxLat) maxLat = rl;
+              if (rg < minLon) minLon = rg;
+              if (rg > maxLon) maxLon = rg;
+            }
+            map.fitBounds([[minLat, minLon], [maxLat, maxLon]], { padding: [30, 30] });
+          }
+        }
+      }
+      scheduleRender();
+    }
+
+    searchInput.addEventListener("input", function () {
+      applyBssFilter(false);
+    });
+    searchInput.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        applyBssFilter(true);
+      }
+    });
+
+    var hasInitialFit = false;
+    function fitAll() {
+      map.invalidateSize();
+      if (!hasInitialFit) {
+        hasInitialFit = true;
+        map.fitBounds(vnBounds, { padding: [20, 20], animate: false });
+      }
+      scheduleRender();
     }
     fitAll();
     setTimeout(fitAll, 0);
     window.addEventListener("load", fitAll);
     if (typeof ResizeObserver !== "undefined") {
-      // Khi khung đổi kích thước (dàn lưới xong, phóng to/thu nhỏ widget) thì đo lại và zoom vừa trạm
-      new ResizeObserver(function () { fitAll(); }).observe(mapEl);
+      new ResizeObserver(function () {
+        map.invalidateSize();
+        scheduleRender();
+      }).observe(mapEl);
     }
+
+    fetch("/api/dashboard/vinfast-bss")
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.json();
+      })
+      .then(function (rows) {
+        if (Array.isArray(rows)) {
+          allRows = rows;
+          filteredRows = rows;
+          countBadge.textContent = rows.length.toLocaleString("vi-VN") + " Tủ đổi pin VinFast";
+          scheduleRender();
+        }
+      })
+      .catch(function () {
+        countBadge.textContent = "Không tải được dữ liệu tủ đổi pin";
+      });
   }
 
   /* --- Station Table in Overview (§2.1) ------------------------------------- */
@@ -604,15 +884,20 @@
   function renderCabinetTempChart(chartEl, legendEl, data) {
     if (!chartEl || typeof echarts === "undefined" || !data) return;
 
-    var chart = getChart(chartEl);
-    var tz = data.timezone || "UTC";
+    var chart = echarts.init(chartEl);
+    activeEchartsInstances.push(chart);
 
     var colors = ["#2563eb", "#7c3aed", "#db2777", "#059669", "#d97706", "#0891b2"];
     var seriesConfig = [];
+    var times = [];
 
     (data.series || []).forEach(function (s, sIdx) {
       var color = colors[sIdx % colors.length];
       var pts = s.points || [];
+      pts.forEach(function (p) {
+        var tLabel = p.timestamp_local || p.timestamp_utc;
+        if (times.indexOf(tLabel) < 0) times.push(tLabel);
+      });
 
       var sObj = {
         name: s.cabinet_id,
@@ -622,7 +907,7 @@
         lineStyle: { width: 2, color: color },
         itemStyle: { color: color },
         data: pts.map(function (p) {
-          return [Date.parse(p.timestamp_utc), p.temperature_c];
+          return [p.timestamp_local || p.timestamp_utc, p.temperature_c];
         })
       };
 
@@ -656,6 +941,8 @@
       seriesConfig.push(sObj);
     });
 
+    times.sort();
+
     chart.setOption({
       backgroundColor: "#ffffff",
       tooltip: {
@@ -666,18 +953,10 @@
       },
       grid: { left: 45, right: 90, top: 25, bottom: 25 },
       xAxis: {
-        type: "time",
+        type: "category",
+        data: times,
         axisLine: { lineStyle: { color: "#e2e8f0" } },
-        axisPointer: { label: { formatter: function (p) { return formatTimeInTz(p.value, tz, true); } } },
-        axisLabel: {
-          color: "#64748b",
-          fontSize: 11,
-          hideOverlap: true,
-          formatter: function (val) { return formatTimeInTz(val, tz, false); }
-        },
-        splitNumber: 6,
-        axisTick: { show: false
-        }
+        axisLabel: { color: "#64748b", fontSize: 11 }
       },
       yAxis: {
         type: "value",
@@ -687,7 +966,7 @@
         axisLabel: { color: "#64748b", formatter: "{value}°C" }
       },
       series: seriesConfig
-    }, true);
+    });
 
     // Render Bảng Chú thích Avg dưới biểu đồ (§1)
     if (legendEl) {
@@ -751,7 +1030,7 @@
           .then(function (respJson) {
             renderCabinetTempChart(chartEl, legendEl, respJson);
           })
-          .catch(function () {});
+          .catch(function () { });
       });
     }
 
@@ -764,38 +1043,14 @@
     var chartEl = document.getElementById("chart-ready-batteries");
     if (!chartEl || typeof echarts === "undefined" || !data || !Array.isArray(data.series)) return;
 
-    var chart = getChart(chartEl);
+    var chart = echarts.init(chartEl);
+    activeEchartsInstances.push(chart);
 
     var colors = ["#2563eb", "#059669", "#7c3aed", "#d97706", "#0891b2"];
     var seriesConfig = [];
+    var timestamps = data.timestamps || [];
 
-    // Nhiều trạm (> 8): gộp theo quốc gia = tổng khoang sẵn sàng / tổng khoang, để biểu đồ đọc được
-    var seriesList = data.series;
-    if (seriesList.length > 8) {
-      var byCountry = {};
-      seriesList.forEach(function (s) {
-        var c = s.country || "?";
-        if (!byCountry[c]) byCountry[c] = {};
-        (s.points || []).forEach(function (p) {
-          var acc = byCountry[c][p.timestamp_utc] || { ready: 0, total: 0 };
-          acc.ready += p.ready_count || 0;
-          acc.total += p.total_slots || 0;
-          byCountry[c][p.timestamp_utc] = acc;
-        });
-      });
-      seriesList = Object.keys(byCountry).sort().map(function (c) {
-        var pts = Object.keys(byCountry[c]).sort().map(function (t) {
-          var acc = byCountry[c][t];
-          return {
-            timestamp_utc: t,
-            ready_pct: acc.total ? Math.round((1000 * acc.ready) / acc.total) / 10 : null
-          };
-        });
-        return { station_id: c, station_name: c + " (tất cả trạm)", points: pts };
-      });
-    }
-
-    seriesList.forEach(function (s, idx) {
+    data.series.forEach(function (s, idx) {
       var col = colors[idx % colors.length];
       seriesConfig.push({
         name: s.station_name || s.station_id,
@@ -806,7 +1061,7 @@
         itemStyle: { color: col },
         areaStyle: { opacity: 0.22, color: col },
         data: (s.points || []).map(function (p) {
-          return [Date.parse(p.timestamp_utc), p.ready_pct];
+          return [p.timestamp_local || p.timestamp_utc, p.ready_pct];
         })
       });
     });
@@ -821,28 +1076,16 @@
         valueFormatter: function (val) { return val !== null ? val + "%" : "—"; }
       },
       legend: {
-        type: "scroll",
-        data: seriesList.map(function (s) { return s.station_name || s.station_id; }),
+        data: data.series.map(function (s) { return s.station_name || s.station_id; }),
         top: 0,
         textStyle: { color: "#64748b", fontSize: 11 }
       },
-      grid: { left: 45, right: 55, top: 32, bottom: 25 },
+      grid: { left: 45, right: 20, top: 32, bottom: 25 },
       xAxis: {
-        type: "time",
-        // Nhiều trạm ở nhiều múi giờ trên cùng một trục: hiển thị giờ UTC và ghi rõ
-        name: "giờ UTC",
-        nameTextStyle: { color: "#94a3b8", fontSize: 10 },
+        type: "category",
+        data: timestamps,
         axisLine: { lineStyle: { color: "#e2e8f0" } },
-        axisPointer: { label: { formatter: function (p) { return formatTimeInTz(p.value, "UTC", true) + " UTC"; } } },
-        axisLabel: {
-          color: "#64748b",
-          fontSize: 11,
-          hideOverlap: true,
-          formatter: function (val) { return formatTimeInTz(val, "UTC", false); }
-        },
-        splitNumber: 6,
-        axisTick: { show: false
-        }
+        axisLabel: { color: "#64748b", fontSize: 11 }
       },
       yAxis: {
         type: "value",
