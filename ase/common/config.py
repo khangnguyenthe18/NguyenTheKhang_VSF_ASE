@@ -51,6 +51,15 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ASE_VIETMAP_API_KEY", "VIETMAP_BROWSER_API_KEY"),
     )
 
+    # Streaming settings (STREAMING_PLAN §5)
+    kafka_bootstrap: str = "localhost:19092"
+    kafka_events_topic: str = "ase.swap.events"
+    kafka_telemetry_topic: str = "ase.cabinet.telemetry"
+    kafka_group_id: str = "ase-detector"
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
+    mqtt_qos: int = Field(default=1, ge=0, le=2)
+
     @field_validator("smtp_user", mode="before")
     @classmethod
     def _empty_user_to_none(cls, v: object) -> object:
@@ -74,14 +83,27 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("smtp_port", mode="before")
+    @field_validator("smtp_port", "mqtt_port", "mqtt_qos", mode="before")
     @classmethod
-    def _empty_port_to_default(cls, v: object) -> object:
+    def _empty_port_to_default(cls, v: object, info: object) -> object:
         if isinstance(v, str) and not v.strip():
-            return 1025
+            defaults = {"smtp_port": 1025, "mqtt_port": 1883, "mqtt_qos": 1}
+            return defaults.get(getattr(info, "field_name", ""), v)
         return v
 
-    @field_validator("smtp_host", "smtp_tls", "mail_from", "mail_to", "notify_mode", mode="before")
+    @field_validator(
+        "smtp_host",
+        "smtp_tls",
+        "mail_from",
+        "mail_to",
+        "notify_mode",
+        "kafka_bootstrap",
+        "kafka_events_topic",
+        "kafka_telemetry_topic",
+        "kafka_group_id",
+        "mqtt_host",
+        mode="before",
+    )
     @classmethod
     def _empty_str_to_default(cls, v: object, info: object) -> object:
         if isinstance(v, str) and not v.strip():
@@ -91,6 +113,11 @@ class Settings(BaseSettings):
                 "mail_from": "ase-alerts@ase.local",
                 "mail_to": "ops@ase.local",
                 "notify_mode": "live",
+                "kafka_bootstrap": "localhost:19092",
+                "kafka_events_topic": "ase.swap.events",
+                "kafka_telemetry_topic": "ase.cabinet.telemetry",
+                "kafka_group_id": "ase-detector",
+                "mqtt_host": "localhost",
             }
             field_name = getattr(info, "field_name", "")
             return defaults.get(field_name, v)

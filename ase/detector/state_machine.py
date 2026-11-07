@@ -92,11 +92,16 @@ class SessionTracker:
         *,
         knowledge: Knowledge | None = None,
         field_view: FieldView | None = None,
+        allowed_lateness_seconds: float = 0.0,
     ) -> None:
+        if allowed_lateness_seconds < 0:
+            raise ValueError("allowed_lateness_seconds must be >= 0")
         self.clock = clock
         self.knowledge = knowledge or default_knowledge()
         self.sm = self.knowledge.state_machine
         self.field_view = field_view
+        self.allowed_lateness_seconds = float(allowed_lateness_seconds)
+        self.allowed_lateness = timedelta(seconds=allowed_lateness_seconds)
         self.chain = _step_chain(self.sm)
         self.step_idx_map: dict[Step, int] = {s: i for i, s in enumerate(self.chain)}
 
@@ -111,6 +116,7 @@ class SessionTracker:
         self.late_events_handled: int = 0
         self.backward_transitions_ignored: int = 0
         self.total_events_processed: int = 0
+        self.max_arrival_lag_seconds: float = 0.0
 
     @property
     def total_sessions_seen(self) -> int:
@@ -133,7 +139,7 @@ class SessionTracker:
 
     def _pop_expired_timers(self, up_to: datetime, *, strict_before: bool = False) -> list[Finding]:
         findings: list[Finding] = []
-        limit = ensure_utc(up_to)
+        limit = ensure_utc(up_to) - self.allowed_lateness
         while self._timers:
             deadline = self._timers[0][0]
             if (deadline >= limit) if strict_before else (deadline > limit):
@@ -170,8 +176,9 @@ class SessionTracker:
 
     def on_event(self, raw_event: SwapEvent) -> list[Finding]:
         occ_utc = ensure_utc(raw_event.occurred_at)
-        is_late = self._max_occurred_at is not None and occ_utc < self._max_occurred_at
-        if self._max_occurred_at is None or occ_utc > self._max_occurred_at:
+        prev_max = self._max_occurred_at
+        is_late = prev_max is not None and occ_utc < prev_max
+        if prev_max is None or occ_utc > prev_max:
             self._max_occurred_at = occ_utc
 
         if isinstance(self.clock, SimClock):
@@ -185,8 +192,11 @@ class SessionTracker:
 
         self._seen_event_ids.add(raw_event.event_id)
         self.total_events_processed += 1
-        if is_late:
+        if is_late and prev_max is not None:
             self.late_events_handled += 1
+            lag_s = round((prev_max - occ_utc).total_seconds(), 6)
+            if lag_s > self.max_arrival_lag_seconds:
+                self.max_arrival_lag_seconds = lag_s
 
         ev = self.field_view.mask_event(raw_event) if self.field_view is not None else raw_event
 

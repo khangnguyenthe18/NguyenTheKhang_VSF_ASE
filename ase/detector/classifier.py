@@ -433,6 +433,7 @@ def build_coverage_report(
         backward_transitions_ignored=tracker.backward_transitions_ignored,
         total_events_processed=tracker.total_events_processed,
         total_sessions_seen=tracker.total_sessions_seen,
+        max_arrival_lag_seconds=tracker.max_arrival_lag_seconds,
     )
 
 

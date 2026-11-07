@@ -25,6 +25,9 @@ notify:
   daily_report_local_time: "18:00"
   daily_report_timezone: "Asia/Ho_Chi_Minh"
 
+stream:
+  allowed_lateness_seconds: 10
+
 # Tầng trường dữ liệu (CLAUDE.md §10.1).
 field_tiers:
   T0:

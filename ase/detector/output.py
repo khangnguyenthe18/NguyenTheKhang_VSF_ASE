@@ -116,6 +116,20 @@ def _write_jsonl(path: Path, items: list[BaseModel]) -> None:
             f.write("\n")
 
 
+def write_incidents_atomic(
+    out_dir: Path,
+    *,
+    corr: Correlator,
+    disp: Dispatcher,
+) -> None:
+    """Ghi `incidents.jsonl` qua file tạm rồi `rename` nguyên tử (STREAMING_PLAN §7)."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    records = build_incident_records(corr, disp)
+    tmp_path = out_dir / f".{INCIDENTS_FILE}.tmp"
+    _write_jsonl(tmp_path, list(records))
+    tmp_path.replace(out_dir / INCIDENTS_FILE)
+
+
 def write_outputs(
     out_dir: Path,
     *,

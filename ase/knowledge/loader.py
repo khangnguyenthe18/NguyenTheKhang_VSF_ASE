@@ -297,10 +297,15 @@ class NotifySpec(_Strict):
         return self
 
 
+class StreamSpec(_Strict):
+    allowed_lateness_seconds: float = Field(default=10.0, ge=0.0)
+
+
 class DetectorSpec(_Strict):
     correlator: CorrelatorSpec
     classifier: ClassifierSpec
     notify: NotifySpec
+    stream: StreamSpec = Field(default_factory=StreamSpec)
     field_tiers: dict[str, list[str]]
     field_presets: dict[str, list[str]]
 
