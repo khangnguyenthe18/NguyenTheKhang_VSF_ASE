@@ -1114,3 +1114,91 @@ def test_vinfast_bss_api_returns_43298_cabinets(smoke_env: tuple[Settings, Path]
     assert isinstance(code, str) and code.startswith("B.")
     assert isinstance(name, str) and len(name) > 0
     assert isinstance(address, str)
+
+
+def test_alarms_use_latest_incident_revision_skip_merged_and_card_local_time(
+    tmp_path: Path,
+) -> None:
+    """Hồi quy: bảng Cảnh báo lấy revision mới nhất, bỏ incident đã gộp (`merged_into`), và
+    alarm từ card hiển thị giờ địa phương theo `first_seen_at` + timezone của card."""
+    as_of = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
+    st_df = pl.DataFrame(
+        {
+            "station_id": ["ST-01"],
+            "country": ["VN"],
+            "timezone": ["Asia/Ho_Chi_Minh"],
+            "model_gen": ["G1"],
+            "lat": [10.8],
+            "lon": [106.6],
+        }
+    )
+    cab_df = pl.DataFrame({"cabinet_id": ["CAB-01"], "station_id": ["ST-01"], "model_gen": ["G1"]})
+    empty_df = pl.DataFrame()
+    data = ProfileData(
+        profile="synthetic",
+        profile_dir=tmp_path,
+        manifest_mtime=0.0,
+        stations=st_df,
+        cabinets=cab_df,
+        slots=pl.DataFrame({"cabinet_id": ["CAB-01"], "slot_id": ["01"]}),
+        batteries=empty_df,
+        users=empty_df,
+        swap_sessions=empty_df,
+        payments=empty_df,
+        cabinet_telemetry=pl.DataFrame(
+            {
+                "cabinet_id": ["CAB-01"],
+                "slot_id": [None],
+                "door_state": ["CLOSED"],
+                "battery_detected": [True],
+                "soc": [95.0],
+                "temperature": [32.0],
+                "heartbeat_at": [as_of - timedelta(seconds=30)],
+                "hw_error_code": [None],
+            }
+        ),
+        swap_events=empty_df,
+        min_time=as_of - timedelta(days=1),
+        max_time=as_of,
+        default_as_of=as_of,
+    )
+    first_seen = (as_of - timedelta(minutes=30)).isoformat()
+    base = {"station_id": "ST-01", "country": "VN", "first_seen_at": first_seen}
+    rows = [
+        {**base, "incident_id": "INC-A", "revision": 1, "severity": "P2"},
+        {**base, "incident_id": "INC-A", "revision": 2, "severity": "P1"},
+        {**base, "incident_id": "INC-M", "revision": 1, "severity": "P2", "merged_into": "INC-A"},
+    ]
+    (tmp_path / "incidents.jsonl").write_text(
+        "".join(orjson.dumps(r).decode("utf-8") + "\n" for r in rows), encoding="utf-8"
+    )
+    card_json = {
+        "incident_id": "INC-C",
+        "severity": "P2",
+        "station_id": "ST-01",
+        "timezone": "Asia/Manila",
+        "first_seen_at": first_seen,
+        "session_ids": ["SW-1"],
+    }
+    snapshot = NotifierSnapshot(
+        outbox=[],
+        cards=[
+            {
+                "channel": "it-ops",
+                "incident_id": "INC-C",
+                "revision": 1,
+                "card_json": orjson.dumps(card_json).decode("utf-8"),
+                "received_at": as_of.isoformat(),
+            }
+        ],
+        latest_feedback={},
+    )
+    resp = build_alarms_page(
+        data, as_of=as_of, settings=Settings(data_dir=tmp_path), knowledge=K, notifier=snapshot
+    )
+    by_id = {a.alarm_id: a for a in resp.alarms}
+    assert by_id["INC-A"].severity == "Critical"  # revision 2 (P1), không phải revision 1
+    assert "INC-M" not in by_id
+    card_alarm = by_id["INC-C"]
+    assert card_alarm.start_time_local == "19:30:00 04/11/2026 (GMT+8)"
+    assert card_alarm.details_link == "/dashboard/sessions/SW-1"

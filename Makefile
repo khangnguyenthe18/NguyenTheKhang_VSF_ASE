@@ -99,15 +99,18 @@ notify-demo:
 	$(UV_RUN) python -m ase.notifier.demo $(if $(DRY),--dry-run,)
 
 demo:
-	$(UV_RUN) python -m ase.simulator --profile dev
-	-docker compose up -d mailpit
+	@curl -sf -o /dev/null http://127.0.0.1:8000/ || { \
+	  echo "[LỖI] Dashboard / mock Teams chưa chạy trên cổng 8000."; \
+	  echo "      Mở terminal khác chạy 'make dashboard', rồi chạy lại 'make demo'."; exit 1; }
+	$(UV_RUN) python -m ase.simulator --profile demo
+	docker compose up -d mailpit
 	@echo "Xoá outbox và card cũ (data/notifier.sqlite, data/outbox_preview/)..."
 	rm -f data/notifier.sqlite
 	rm -rf data/outbox_preview/
-	$(UV_RUN) python -m ase.notifier.demo
+	$(UV_RUN) python -m ase.notifier.demo --from-profile demo
 	@echo "================================================================"
-	@echo "Demo ready! Chạy 'make dashboard' ở terminal riêng và mở:"
-	@echo "  - NOC Dashboard: http://localhost:8000/dashboard"
+	@echo "Demo ready! (dashboard đang chạy ở terminal kia) Mở:"
+	@echo "  - NOC Dashboard: http://localhost:8000/dashboard?profile=demo"
 	@echo "  - Mock Teams:    http://localhost:8000"
 	@echo "  - Mailpit:       http://localhost:8025"
 	@echo "================================================================"

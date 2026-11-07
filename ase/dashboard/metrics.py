@@ -1021,12 +1021,19 @@ def build_cabinet_temperature_timeseries(
         meta=meta,
         station_id=selected_station,
         station_name=selected_station,
+        timezone=_station_timezone(data, selected_station),
         hours=hours,
         warn_threshold_c=warn_t,
         critical_threshold_c=crit_t,
         series=series_list,
         available_stations=available_choices,
     )
+
+
+def _station_timezone(data: ProfileData, station_id: str) -> str:
+    """IANA timezone của trạm (mặc định UTC nếu không tìm thấy)."""
+    row = data.stations.filter(pl.col("station_id") == station_id)
+    return str(row["timezone"][0]) if row.height > 0 else "UTC"
 
 
 def build_ready_batteries_timeseries(
@@ -1154,12 +1161,14 @@ def build_alarms_page(
     for inc_file in incidents_candidates:
         if inc_file.exists():
             try:
-                for line in inc_file.read_text(encoding="utf-8").splitlines():
+                # Mỗi revision 1 dòng, sort theo (incident_id, revision): đọc ngược để lấy
+                # revision mới nhất của mỗi incident.
+                for line in reversed(inc_file.read_text(encoding="utf-8").splitlines()):
                     if not line.strip():
                         continue
                     obj = json.loads(line)
                     inc_id = str(obj.get("incident_id") or "")
-                    if not inc_id or inc_id in seen_ids:
+                    if not inc_id or inc_id in seen_ids or obj.get("merged_into"):
                         continue
 
                     fs_str = obj.get("first_seen_at")
@@ -1263,6 +1272,15 @@ def build_alarms_page(
         cab_id = str(parsed.get("cabinet_id") or "")
         originator = cab_id if cab_id else (st_id if st_id else "BSS Network")
         rec_at = str(card.get("received_at") or eff_as_of.isoformat())
+        start_utc_str, start_local_str = rec_at, rec_at
+        fs_raw = parsed.get("first_seen_at")
+        if isinstance(fs_raw, str) and fs_raw:
+            fs_dt = ensure_utc(datetime.fromisoformat(fs_raw.replace("Z", "+00:00")))
+            card_tz = str(parsed.get("timezone") or st_tz_map.get(st_id, "UTC"))
+            start_utc_str, start_local_str = fs_dt.isoformat(), format_local(fs_dt, card_tz)
+        sids = parsed.get("session_ids")
+        if isinstance(sids, list) and sids and isinstance(sids[0], str):
+            first_sid = sids[0]
 
         ch = card.get("channel", "it-ops")
         det_link = f"/dashboard/sessions/{first_sid}" if first_sid else f"/#channel-{ch}"
@@ -1270,8 +1288,8 @@ def build_alarms_page(
         alarms.append(
             AlarmItem(
                 alarm_id=inc_id,
-                start_time_utc=rec_at,
-                start_time_local=rec_at,
+                start_time_utc=start_utc_str,
+                start_time_local=start_local_str,
                 originator=originator,
                 station_id=st_id if st_id else None,
                 cabinet_id=cab_id if cab_id else None,
@@ -2614,7 +2632,8 @@ def build_alerts_page(
         key_str = str(row["key"])
         inc_id = str(row["incident_id"])
         parts = key_str.split(":")
-        mode = parts[0] if len(parts) == 4 and parts[0] in ("dry_run", "live") else "dry_run"
+        # Khoá `{mode}:{incident_id}:{rev}:{channel}`; tin gom có `batch:...` nên dài hơn 4 phần
+        mode = parts[0] if len(parts) >= 4 and parts[0] in ("dry_run", "live") else "dry_run"
         outbox_items.append(
             OutboxItem(
                 key=key_str,
