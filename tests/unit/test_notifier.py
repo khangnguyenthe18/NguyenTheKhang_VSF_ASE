@@ -141,9 +141,11 @@ def test_text_body_not_html_escaped_while_html_body_is_escaped() -> None:
 
 
 def test_router_user_unknown_and_country_overrides(tmp_path: Path) -> None:
-    # USER -> không gửi alert
+    # USER -> CSKH (chỉ qua tin gom 15'; dispatcher không bao giờ gửi USER tức thời)
     user_inc = _make_incident(category=Category.USER, error_code="QR_INVALID")
-    assert route_incident(user_inc) is None
+    user_alert = route_incident(user_inc)
+    assert user_alert is not None
+    assert (user_alert.team, user_alert.channel) == ("CSKH", "cskh")
 
     # UNKNOWN -> IT Ops + needs_human_review=True
     unknown_inc = _make_incident(

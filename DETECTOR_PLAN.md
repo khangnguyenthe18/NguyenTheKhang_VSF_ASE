@@ -91,10 +91,10 @@ Rule theo thứ tự ưu tiên; rule đầu tiên khớp thắng; mỗi rule có
   | USER | không tạo incident tức thời; vào tin gom 15 phút gửi CSKH (mục 4.5). Tỷ lệ USER tăng đột biến (`detector.yaml`) → incident P2 cho IT Ops | trạm |
   | UNKNOWN | `(step, station_id)` | trạm, `needs_human_review` |
 
-- **Cửa sổ:** incident mở nhận thêm phiên nếu `occurred_at - last_seen_at ≤ window` (mặc định 5 phút, đặt trong `detector.yaml`). Quá cửa sổ thì đóng; lỗi mới mở incident mới.
+- **Cửa sổ:** incident mở nhận thêm phiên nếu `occurred_at - last_seen_at ≤ window` (mặc định 5 phút, đặt trong `detector.yaml`; ghi đè theo nhóm qua `window_minutes_by_category`, hiện SYSTEM = 15 phút). Quá cửa sổ thì đóng; lỗi mới mở incident mới.
 - **Gán theo cụm cho phiên không có mã:** phiên `UNKNOWN`, hoặc phiên suy luận có confidence thấp, nếu trùng bước và thời gian với một incident đang mở có mã (ví dụ `SESS_CREATE_5XX` không mã trong lúc deploy 503) thì gắn vào incident đó, với `rule_id=R_CLUSTER`. Đây là cơ chế chính để rule-only xử lý khoảng 10% phiên thiếu `error_code`.
 - **Revision:**
-  - Tạo incident → `revision=1` → alert đầu tiên **ngay lập tức** (SF5).
+  - Tạo incident → `revision=1`. Chỉ incident **P1** gửi alert đầu tiên **ngay lập tức** (SF5); P2/P3 đi theo tin gom 15 phút (§4.5).
   - Thêm phiên chỉ cập nhật `n_sessions`, `n_stations`, `countries`, `last_seen_at`; **không** tăng revision.
   - **Chỉ tăng revision khi severity tăng** (CLAUDE.md §8), để giữ SF8 ≤ 1,2.
 - **Evidence:** `event_id` thật của tối đa 5 phiên đầu. Không bao giờ tạo ID không có trong luồng (SF9).

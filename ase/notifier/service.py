@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from functools import partial
+from typing import Protocol, runtime_checkable
+
 import structlog
 from pydantic import BaseModel
 
 from ase.common.config import Settings, get_settings
-from ase.common.models import Incident
+from ase.common.models import Incident, TeamBatch
 from ase.common.transport import Clock, WallClock
 from ase.notifier.email_smtp import SmtpEmailNotifier
 from ase.notifier.outbox import Outbox
@@ -14,6 +18,18 @@ from ase.notifier.router import Alert, AlertRouter, Notifier, SendResult
 from ase.notifier.teams_mock_client import TeamsMockNotifier
 
 log = structlog.get_logger(__name__)
+
+
+@runtime_checkable
+class BatchNotifier(Protocol):
+    """Kênh hỗ trợ gửi tin gom (`SmtpEmailNotifier`, `TeamsMockNotifier`)."""
+
+    async def send_batch(self, batch: TeamBatch) -> SendResult: ...
+
+
+class BatchReport(BaseModel):
+    batch_id: str
+    results: list[SendResult]
 
 
 class NotifyReport(BaseModel):
@@ -131,6 +147,52 @@ class NotifierService:
             results.append(res)
 
         return NotifyReport(alert=alert, results=results)
+
+    async def notify_batch(self, batch: TeamBatch) -> BatchReport:
+        """Gửi tin gom qua Mail + Teams; idempotency qua outbox với khoá `batch_id` (rev 1)."""
+        results: list[SendResult] = []
+        for channel_name, notifier in (
+            ("email", self.email_notifier),
+            ("teams", self.teams_notifier),
+        ):
+            if not isinstance(notifier, BatchNotifier):
+                results.append(
+                    SendResult(channel=channel_name, status="SKIPPED", detail="no_batch_support")
+                )
+                continue
+            results.append(
+                await self._send_once(
+                    batch.batch_id, 1, channel_name, partial(notifier.send_batch, batch)
+                )
+            )
+        return BatchReport(batch_id=batch.batch_id, results=results)
+
+    async def _send_once(
+        self,
+        item_id: str,
+        revision: int,
+        channel_name: str,
+        send: Callable[[], Awaitable[SendResult]],
+    ) -> SendResult:
+        decision = await self.outbox.acquire(item_id, revision, channel_name)
+        if decision == "ALREADY_SENT":
+            log.info("batch_skipped_duplicate", batch_id=item_id, channel=channel_name)
+            return SendResult(channel=channel_name, status="SKIPPED", detail="already_sent")
+        if decision == "RATE_LIMITED":
+            log.warning("batch_skipped_rate_limit", batch_id=item_id, channel=channel_name)
+            return SendResult(channel=channel_name, status="SKIPPED", detail="max_alerts_per_run")
+        try:
+            res = await send()
+        except Exception as exc:
+            await self.outbox.mark_failed(item_id, revision, channel_name, str(exc))
+            log.error("batch_send_failed", batch_id=item_id, channel=channel_name, error=str(exc))
+            return SendResult(channel=channel_name, status="FAILED", detail=str(exc))
+        if res.status == "SENT":
+            await self.outbox.mark_sent(item_id, revision, channel_name)
+            log.info("batch_dispatched", batch_id=item_id, channel=channel_name)
+        elif res.status == "FAILED":
+            await self.outbox.mark_failed(item_id, revision, channel_name, res.detail or "failed")
+        return res
 
 
 async def notify(

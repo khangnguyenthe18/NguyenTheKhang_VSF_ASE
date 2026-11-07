@@ -1,0 +1,22 @@
+Dear Team {{ team }},
+
+Tổng hợp giao dịch lỗi trong chu kỳ {{ window }}: {{ n_total }} giao dịch, {{ n_incidents }} incident.
+Theo nhóm: {{ by_category }}
+
+Incident trong chu kỳ:
+{% for i in incidents %}
+• {{ i.incident_id }} [{{ i.severity }}] {{ i.category }} – {{ i.error_code }} – bước {{ i.step }} – {{ i.scope }} – {{ i.n_sessions }} GD / {{ i.n_stations }} trạm – từ {{ i.first_seen }}{% if i.needs_human_review %} [Cần OPS xem xét]{% endif %}
+
+{% else %}
+• (không có incident; lỗi người dùng đơn lẻ)
+{% endfor %}
+
+Chi tiết giao dịch ({{ n_shown }}/{{ n_total }} dòng{% if n_shown < n_total %}, xem đủ trong {{ csv_filename }}{% endif %}):
+{% for r in rows %}
+- {{ r.session_id }} | {{ r.local_time }} | {{ r.country }} | {{ r.station }} | {{ r.step }} | {{ r.error_code }} | {{ r.category }} | {{ r.severity }} | {{ r.incident_id }}
+{% endfor %}
+
+File đính kèm: {{ csv_filename }} (đủ {{ n_total }} dòng)
+Dashboard: {{ dashboard_url }}
+Mã tin gom: {{ batch_id }}
+-- AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.

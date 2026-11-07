@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <title>{{ subject }}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #1f2937; line-height: 1.5; max-width: 960px; margin: 0 auto; padding: 16px;">
+  <div style="border: 1px solid #d1d5db; border-top: 4px solid #2563eb; border-radius: 6px; padding: 20px; background: #ffffff;">
+    <p style="margin-top: 0;">Dear Team <strong>{{ team }}</strong>,</p>
+    <p>Tổng hợp giao dịch lỗi trong chu kỳ <strong>{{ window }}</strong>: <strong>{{ n_total }}</strong> giao dịch, <strong>{{ n_incidents }}</strong> incident.<br>Theo nhóm: {{ by_category }}</p>
+
+    {% if incidents %}
+    <h3 style="font-size: 15px; margin-bottom: 6px;">Incident trong chu kỳ</h3>
+    <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
+      <tr style="background: #f3f4f6;"><th align="left">Incident</th><th align="left">Mức</th><th align="left">Nhóm</th><th align="left">Mã lỗi</th><th align="left">Bước</th><th align="left">Phạm vi</th><th align="right">GD</th><th align="left">Từ</th></tr>
+      {% for i in incidents %}
+      <tr style="border-top: 1px solid #e5e7eb;"><td><code>{{ i.incident_id }}</code></td><td>{{ i.severity }}</td><td>{{ i.category }}{% if i.needs_human_review %} <span style="color:#dc2626;">(cần OPS xem xét)</span>{% endif %}</td><td><code>{{ i.error_code }}</code></td><td>{{ i.step }}</td><td>{{ i.scope }}</td><td align="right">{{ i.n_sessions }}</td><td>{{ i.first_seen }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+
+    <h3 style="font-size: 15px; margin-bottom: 6px;">Chi tiết giao dịch ({{ n_shown }}/{{ n_total }} dòng)</h3>
+    <table style="border-collapse: collapse; width: 100%; font-size: 12px;">
+      <tr style="background: #f3f4f6;"><th align="left">Mã GD</th><th align="left">Giờ địa phương trạm</th><th align="left">Nước</th><th align="left">Trạm / Tủ / Khoang</th><th align="left">Bước</th><th align="left">Mã lỗi</th><th align="left">Nhóm</th><th align="left">Mức</th><th align="left">Incident</th></tr>
+      {% for r in rows %}
+      <tr style="border-top: 1px solid #e5e7eb;"><td><code>{{ r.session_id }}</code></td><td>{{ r.local_time }}</td><td>{{ r.country }}</td><td>{{ r.station }}</td><td>{{ r.step }}</td><td><code>{{ r.error_code }}</code></td><td>{{ r.category }}</td><td>{{ r.severity }}</td><td><code>{{ r.incident_id }}</code></td></tr>
+      {% endfor %}
+    </table>
+    {% if n_shown < n_total %}
+    <p style="color: #b45309;">Mail chỉ hiện {{ n_shown }}/{{ n_total }} dòng; xem đủ trong file đính kèm <code>{{ csv_filename }}</code>.</p>
+    {% endif %}
+
+    <p><a href="{{ dashboard_url }}">Mở dashboard</a> · Mã tin gom: <code>{{ batch_id }}</code></p>
+    <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 16px 0;">
+    <p style="font-size: 12px; color: #6b7280; margin-bottom: 0;">-- AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.</p>
+  </div>
+</body>
+</html>

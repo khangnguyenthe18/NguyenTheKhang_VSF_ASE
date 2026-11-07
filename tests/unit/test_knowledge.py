@@ -65,7 +65,7 @@ def test_every_category_has_route() -> None:
     r = default_knowledge().routing
     for c in Category:
         assert r.route_for(c) is not None
-    assert r.route_for(Category.USER).alert is False
+    assert (r.route_for(Category.USER).team, r.route_for(Category.USER).alert) == ("CSKH", True)
     assert r.route_for(Category.UNKNOWN).needs_human_review is True
 
 

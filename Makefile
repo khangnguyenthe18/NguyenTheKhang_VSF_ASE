@@ -3,7 +3,7 @@ PROFILE ?= smoke
 UV ?= $(shell command -v uv 2>/dev/null)
 UV_RUN ?= $(if $(UV),$(UV) run --no-sync,)
 
-.PHONY: check lint type test sim teams dashboard notify-demo mail-up mail-down demo
+.PHONY: check lint type test sim detect detect-ablation teams dashboard notify-demo mail-up mail-down demo
 
 check: lint type test
 
@@ -19,6 +19,15 @@ test:
 
 sim:
 	$(UV_RUN) python -m ase.simulator --profile $(PROFILE)
+
+FIELDS ?= ALL
+detect:
+	$(UV_RUN) python -m ase.detector --profile $(PROFILE) --fields $(FIELDS) $(if $(NOTIFY),--notify,)
+
+detect-ablation:
+	@for f in T0 T0+T1 T0+T1+T2 ALL; do \
+	  $(UV_RUN) python -m ase.detector --profile $(PROFILE) --fields $$f || exit 1; \
+	done
 
 teams:
 	$(UV_RUN) uvicorn ase.notifier.mock_teams.app:app --port 8000

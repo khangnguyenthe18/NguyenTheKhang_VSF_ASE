@@ -32,6 +32,7 @@ CHANNELS: list[tuple[str, str]] = [
     ("payment-ops", "Payment Ops"),
     ("business-ops", "Business Ops"),
     ("battery-ops", "Battery Ops"),
+    ("cskh", "CSKH"),
 ]
 
 _SCHEMA = """

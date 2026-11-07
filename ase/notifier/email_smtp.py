@@ -10,6 +10,8 @@ import aiosmtplib
 import structlog
 
 from ase.common.config import Settings, get_settings
+from ase.common.models import TeamBatch
+from ase.notifier.batch import batch_file_stem, render_batch_email
 from ase.notifier.render import RenderedEmail, render_email
 from ase.notifier.retry import async_sleep, smtp_retrying
 from ase.notifier.router import Alert, SendResult
@@ -85,12 +87,69 @@ class SmtpEmailNotifier:
             )
             return SendResult(channel="email", status="SENT", detail=str(html_path))
 
+        return await self._deliver(
+            lambda f, t: build_mime_message(rendered, mail_from=f, mail_to=t),
+            incident_id=inc.incident_id,
+            session_id=inc.session_ids[0],
+            revision=inc.revision,
+        )
+
+    async def send_batch(self, batch: TeamBatch) -> SendResult:
+        """Gửi tin gom của 1 team: mail có bảng + CSV đầy đủ đính kèm (CLAUDE.md §8)."""
+        rendered = render_batch_email(
+            batch, dashboard_url=f"{self.settings.feedback_base_url.rstrip('/')}/dashboard/alerts"
+        )
+
+        def build(mail_from: str, mail_to: str) -> EmailMessage:
+            msg = build_mime_message(
+                RenderedEmail(
+                    subject=rendered.subject,
+                    text_body=rendered.text_body,
+                    html_body=rendered.html_body,
+                ),
+                mail_from=mail_from,
+                mail_to=mail_to,
+            )
+            msg.add_attachment(
+                rendered.csv_text.encode("utf-8"),
+                maintype="text",
+                subtype="csv",
+                filename=rendered.csv_filename,
+            )
+            return msg
+
+        if self.settings.notify_mode == "dry_run":
+            msg = build(
+                self.settings.mail_from or self.settings.smtp_user or "ase-alerts@ase.local",
+                self.settings.mail_to or "ops@ase.local",
+            )
+            preview_dir = self.settings.preview_dir
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            stem = batch_file_stem(batch.batch_id)
+            html_path = preview_dir / f"{stem}.html"
+            html_path.write_text(rendered.html_body, encoding="utf-8")
+            (preview_dir / f"{stem}.eml").write_bytes(msg.as_bytes())
+            (preview_dir / rendered.csv_filename).write_text(rendered.csv_text, encoding="utf-8")
+            log.info("batch_email_preview_written", batch_id=batch.batch_id, path=str(html_path))
+            return SendResult(channel="email", status="SENT", detail=str(html_path))
+
+        return await self._deliver(build, incident_id=batch.batch_id, session_id=None, revision=1)
+
+    async def _deliver(
+        self,
+        build: Callable[[str, str], EmailMessage],
+        *,
+        incident_id: str,
+        session_id: str | None,
+        revision: int,
+    ) -> SendResult:
+        """Gửi live qua SMTP (dùng chung cho alert P1 và tin gom)."""
         # Chế độ live: dừng thử nhanh nếu lần kết nối trước đó trong phiên đã thất bại
         if self._connection_failed:
             log.error(
                 "smtp_connection_previously_failed",
-                incident_id=inc.incident_id,
-                session_id=inc.session_ids[0],
+                incident_id=incident_id,
+                session_id=session_id,
                 error=self._connection_error_detail,
                 hint="Mailpit chưa chạy? `make mail-up`",
             )
@@ -118,8 +177,8 @@ class SmtpEmailNotifier:
             err_msg = f"Thiếu cấu hình SMTP cho chế độ live: {', '.join(missing)}"
             log.error(
                 "email_config_missing",
-                incident_id=inc.incident_id,
-                session_id=inc.session_ids[0],
+                incident_id=incident_id,
+                session_id=session_id,
                 missing=missing,
             )
             raise NotifierConfigError(err_msg)
@@ -133,7 +192,7 @@ class SmtpEmailNotifier:
             log.error("smtp_insecure_auth_rejected", host=self.settings.smtp_host)
             raise NotifierConfigError(err_msg)
 
-        msg = build_mime_message(rendered, mail_from=mail_from, mail_to=mail_to)
+        msg = build(mail_from, mail_to)
         sender: SmtpSendCallable = self._send_fn or aiosmtplib.send
 
         send_kwargs: dict[str, object] = {
@@ -162,8 +221,8 @@ class SmtpEmailNotifier:
             self._connection_error_detail = err_msg
             log.error(
                 "smtp_connect_failed",
-                incident_id=inc.incident_id,
-                session_id=inc.session_ids[0],
+                incident_id=incident_id,
+                session_id=session_id,
                 hint=hint,
                 error=str(exc),
             )
@@ -171,9 +230,9 @@ class SmtpEmailNotifier:
 
         log.info(
             "email_sent_live",
-            incident_id=inc.incident_id,
-            session_id=inc.session_ids[0],
-            revision=inc.revision,
+            incident_id=incident_id,
+            session_id=session_id,
+            revision=revision,
             to=mail_to,
         )
         return SendResult(channel="email", status="SENT", detail=mail_to)

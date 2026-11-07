@@ -5,7 +5,7 @@ routes:
   HARDWARE:        {team: "Field Ops",    alert: true}
   PAYMENT:         {team: "Payment Ops",  alert: true}
   BUSINESS:        {team: "Business Ops", alert: true}
-  USER:            {team: null,           alert: false}  # chỉ thống kê; alert khi tăng đột biến
+  USER:            {team: "CSKH",         alert: true}  # không gửi tức thời; tin gom 15' cho CSKH (§8)
   BATTERY_QUALITY: {team: "Battery Ops",  alert: true}
   UNKNOWN:         {team: "IT Ops",       alert: true, needs_human_review: true}
 

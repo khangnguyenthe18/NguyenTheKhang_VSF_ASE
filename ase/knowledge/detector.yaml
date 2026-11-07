@@ -3,6 +3,10 @@
 
 correlator:
   window_minutes: 5
+  # Cửa sổ riêng theo nhóm. SYSTEM lan rộng nhiều trạm/nước nhưng thưa theo thời gian (dev: khoảng
+  # trống tối đa 11' trong 1 sự cố deploy_503) → 15' (= 1 chu kỳ tin gom) để ra đúng 1 incident.
+  window_minutes_by_category:
+    SYSTEM: 15
   user_spike_window_minutes: 15
   user_spike_min_sessions: 10
   cluster_confidence_threshold: 0.8

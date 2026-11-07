@@ -257,10 +257,14 @@ class Countries(_Strict):
 
 class CorrelatorSpec(_Strict):
     window_minutes: int = Field(gt=0)
+    window_minutes_by_category: dict[Category, int] = Field(default_factory=dict)
     user_spike_window_minutes: int = Field(gt=0)
     user_spike_min_sessions: int = Field(gt=0)
     cluster_confidence_threshold: float = Field(ge=0.0, le=1.0)
     max_evidence_ids: int = Field(ge=1, le=5)
+
+    def window_for(self, category: Category) -> int:
+        return self.window_minutes_by_category.get(category, self.window_minutes)
 
 
 class ClassifierSpec(_Strict):

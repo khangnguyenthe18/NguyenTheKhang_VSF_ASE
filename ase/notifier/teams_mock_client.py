@@ -8,7 +8,9 @@ import httpx
 import structlog
 
 from ase.common.config import Settings, get_settings
+from ase.common.models import TeamBatch
 from ase.notifier.adaptive_card import build_adaptive_card
+from ase.notifier.batch import build_batch_card
 from ase.notifier.retry import async_sleep, http_retrying
 from ase.notifier.router import Alert, SendResult
 
@@ -47,3 +49,21 @@ class TeamsMockNotifier:
             channel=alert.channel,
         )
         return SendResult(channel="teams", status="SENT", detail=alert.channel)
+
+    async def send_batch(self, batch: TeamBatch) -> SendResult:
+        """POST card tin gom (chỉ số + top 10 + link dashboard) tới kênh của team."""
+        card = build_batch_card(
+            batch,
+            dashboard_url=f"{self.settings.feedback_base_url.rstrip('/')}/dashboard/alerts",
+        )
+        await self._post(batch.channel, card)
+        log.info("teams_batch_card_sent", batch_id=batch.batch_id, channel=batch.channel)
+        return SendResult(channel="teams", status="SENT", detail=batch.channel)
+
+    async def _post(self, channel: str, card: dict[str, object]) -> None:
+        url = f"{self.settings.teams_url.rstrip('/')}/webhook/{channel}"
+        async with httpx.AsyncClient(transport=self._transport, timeout=10.0) as client:
+            async for attempt in http_retrying(sleep=self._sleep):
+                with attempt:
+                    resp = await client.post(url, json=card)
+                    resp.raise_for_status()

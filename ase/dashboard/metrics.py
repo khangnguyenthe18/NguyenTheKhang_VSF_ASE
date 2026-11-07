@@ -1160,12 +1160,14 @@ def build_alarms_page(
     for inc_file in incidents_candidates:
         if inc_file.exists():
             try:
-                for line in inc_file.read_text(encoding="utf-8").splitlines():
+                # Mỗi revision 1 dòng, sort theo (incident_id, revision): đọc ngược để lấy
+                # revision mới nhất của mỗi incident.
+                for line in reversed(inc_file.read_text(encoding="utf-8").splitlines()):
                     if not line.strip():
                         continue
                     obj = json.loads(line)
                     inc_id = str(obj.get("incident_id") or "")
-                    if not inc_id or inc_id in seen_ids:
+                    if not inc_id or inc_id in seen_ids or obj.get("merged_into"):
                         continue
 
                     fs_str = obj.get("first_seen_at")
@@ -2629,7 +2631,8 @@ def build_alerts_page(
         key_str = str(row["key"])
         inc_id = str(row["incident_id"])
         parts = key_str.split(":")
-        mode = parts[0] if len(parts) == 4 and parts[0] in ("dry_run", "live") else "dry_run"
+        # Khoá `{mode}:{incident_id}:{rev}:{channel}`; tin gom có `batch:...` nên dài hơn 4 phần
+        mode = parts[0] if len(parts) >= 4 and parts[0] in ("dry_run", "live") else "dry_run"
         outbox_items.append(
             OutboxItem(
                 key=key_str,

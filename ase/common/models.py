@@ -118,6 +118,57 @@ class Incident(BaseModel):
     _aware = field_validator("first_seen_at", "last_seen_at")(_require_aware)
 
 
+class BatchRow(BaseModel):
+    """1 lỗi (1 phiên) trong tin gom 15 phút (CLAUDE.md §8 "Lịch gửi thông báo")."""
+
+    session_id: str
+    incident_id: str | None = None  # USER không có incident
+    category: Category
+    severity: Severity
+    error_code: str | None = None
+    step: Step
+    station_id: str
+    cabinet_id: str | None = None
+    slot_id: str | None = None
+    country: str
+    timezone: str  # IANA của trạm, để hiển thị giờ địa phương
+    occurred_at: datetime  # UTC
+    detected_at: datetime  # UTC
+
+    _aware = field_validator("occurred_at", "detected_at")(_require_aware)
+
+
+class BatchIncident(BaseModel):
+    """Tóm tắt 1 incident trong tin gom (nhóm các dòng theo incident)."""
+
+    incident_id: str
+    category: Category
+    severity: Severity
+    error_code: str | None = None
+    step: Step
+    scope: str  # vd "VN-HN-001 / CAB-03", "GLOBAL (ID, PH, VN)"
+    n_sessions: int = Field(ge=0)  # số dòng của incident trong tin gom này
+    n_stations: int = Field(ge=1)
+    first_seen_at: datetime
+    needs_human_review: bool = False
+
+    _aware = field_validator("first_seen_at")(_require_aware)
+
+
+class TeamBatch(BaseModel):
+    """Tin gom P2/P3/USER của 1 team trong 1 chu kỳ. Idempotency: `batch_id`."""
+
+    batch_id: str  # batch:{channel}:{window_start:%Y%m%dT%H%MZ}
+    team: str
+    channel: str
+    window_start: datetime  # UTC, căn mốc tròn
+    window_end: datetime  # UTC; cũng là thời điểm gửi (mô phỏng)
+    rows: list[BatchRow] = Field(default_factory=list)
+    incidents: list[BatchIncident] = Field(default_factory=list)
+
+    _aware = field_validator("window_start", "window_end")(_require_aware)
+
+
 class OpenPoint(BaseModel):
     id: str  # ổn định qua các kỳ
     group: Literal["OPERATION", "AI_SYSTEM"]
