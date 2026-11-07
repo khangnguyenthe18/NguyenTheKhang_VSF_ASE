@@ -62,6 +62,16 @@ RULE_DEFINITIONS: tuple[RuleDefinition, ...] = (
         reason="Thiếu cabinet_id/slot_id (T1) hoặc door_state/battery_detected (T3)",
     ),
     RuleDefinition(
+        rule_id="R_INF_CABINET_OVERHEAT",
+        required_fields=("cabinet_id", "temperature"),
+        reason="Thiếu cabinet_id (T1) hoặc temperature (T3) để suy luận tủ/khoang quá nhiệt",
+    ),
+    RuleDefinition(
+        rule_id="R_INF_BAT_RETURN_FAULT",
+        required_fields=("cabinet_id", "temperature"),
+        reason="Thiếu cabinet_id (T1) hoặc temperature (T3) để suy luận pin trả về quá nhiệt",
+    ),
+    RuleDefinition(
         rule_id="R_INF_CABINET_DISCONNECT",
         required_fields=("cabinet_id", "heartbeat_at"),
         reason="Thiếu trường cabinet_id (T1) hoặc heartbeat_at (T3) để suy luận mất kết nối tủ",
@@ -286,7 +296,9 @@ class Classifier:
 
             temp = self.field_view.latest_temperature(cab_id, slot_id, now)
             if temp is not None:
-                if temp > self.thresholds.temp_warn_2_c:
+                if self.is_rule_enabled("R_INF_CABINET_OVERHEAT") and (
+                    temp > self.thresholds.temp_warn_2_c
+                ):
                     return self._build(
                         finding,
                         cabinet_id=cab_id,
@@ -294,10 +306,12 @@ class Classifier:
                         category=Category.HARDWARE,
                         severity=self.catalog.severity_for("CABINET_OVERHEAT"),
                         error_code="CABINET_OVERHEAT",
-                        rule_id="R_INF_CABINET_DISCONNECT",
+                        rule_id="R_INF_CABINET_OVERHEAT",
                         confidence=self.cfg.inferred_confidence,
                     )
-                if temp > self.thresholds.temp_warn_1_c:
+                if self.is_rule_enabled("R_INF_BAT_RETURN_FAULT") and (
+                    temp > self.thresholds.temp_warn_1_c
+                ):
                     return self._build(
                         finding,
                         cabinet_id=cab_id,
@@ -305,7 +319,7 @@ class Classifier:
                         category=Category.BATTERY_QUALITY,
                         severity=self.catalog.severity_for("BAT_RETURN_FAULT", temperature=temp),
                         error_code="BAT_RETURN_FAULT",
-                        rule_id="R_INF_SLOT_SENSOR_FAIL",
+                        rule_id="R_INF_BAT_RETURN_FAULT",
                         confidence=self.cfg.inferred_confidence,
                     )
 

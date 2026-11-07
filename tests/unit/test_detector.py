@@ -418,6 +418,75 @@ def test_classifier_bat_return_fault_escalates_to_p1_above_55c() -> None:
     assert c_high.severity is Severity.P1
 
 
+def test_classifier_step6_temperature_inference_rules_and_ablation() -> None:
+    """Bước 6 không mã: >60°C -> CABINET_OVERHEAT; >55°C -> BAT_RETURN_FAULT; đúng rule_id."""
+    clock = SimClock()
+    t_ev = T0_TIME + timedelta(seconds=30)
+    clock.advance(t_ev)
+
+    def tel(cab: str, temp: float) -> CabinetTelemetry:
+        # Cửa đã mở rồi đóng + có pin: không khớp DOOR_JAM / SENSOR_FAIL
+        return CabinetTelemetry(
+            cabinet_id=cab,
+            slot_id="01",
+            door_state="CLOSED",
+            battery_detected=True,
+            temperature=temp,
+            heartbeat_at=t_ev,
+        )
+
+    open_rows = [
+        CabinetTelemetry(
+            cabinet_id=cab,
+            slot_id="01",
+            door_state="OPEN",
+            battery_detected=False,
+            temperature=30.0,
+            heartbeat_at=t_ev - timedelta(seconds=20),
+        )
+        for cab in ("CAB-HOT", "CAB-WARM")
+    ]
+    ctx = ContextStore.from_models(
+        stations=[_station()],
+        telemetry=[*open_rows, tel("CAB-HOT", 62.0), tel("CAB-WARM", 57.0)],
+    )
+    base = Finding(
+        session_id="S-HOT",
+        station_id="VN-ST-001",
+        cabinet_id="CAB-HOT",
+        slot_id="01",
+        step=Step.RETURN_BATTERY,
+        kind="EXPLICIT_FAILURE",
+        error_code=None,
+        status="FAILED",
+        occurred_at=t_ev,
+        detected_at=t_ev,
+        event_ids=["evt-hot"],
+    )
+    warm = base.model_copy(update={"session_id": "S-WARM", "cabinet_id": "CAB-WARM"})
+
+    clf = Classifier(clock, FieldView(ctx, preset="ALL", knowledge=K), knowledge=K)
+    c_hot, c_warm = clf.classify(base), clf.classify(warm)
+    assert (c_hot.rule_id, c_hot.error_code, c_hot.category) == (
+        "R_INF_CABINET_OVERHEAT",
+        "CABINET_OVERHEAT",
+        Category.HARDWARE,
+    )
+    assert c_hot.severity is Severity.P1
+    assert (c_warm.rule_id, c_warm.error_code, c_warm.category) == (
+        "R_INF_BAT_RETURN_FAULT",
+        "BAT_RETURN_FAULT",
+        Category.BATTERY_QUALITY,
+    )
+    assert c_warm.severity is Severity.P1
+
+    # Thiếu temperature (T3) -> hai rule bị tắt, có trong coverage, rơi về UNKNOWN
+    clf_t2 = Classifier(clock, FieldView(ctx, preset="T0+T1+T2", knowledge=K), knowledge=K)
+    disabled = {r.rule_id for r in clf_t2.disabled_rules}
+    assert {"R_INF_CABINET_OVERHEAT", "R_INF_BAT_RETURN_FAULT"} <= disabled
+    assert clf_t2.classify(base).rule_id == "R_UNKNOWN"
+
+
 def test_classifier_each_telemetry_and_context_inference_rule() -> None:
     clock = SimClock()
     t_ev = T0_TIME + timedelta(minutes=5)
