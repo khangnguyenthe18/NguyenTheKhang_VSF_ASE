@@ -69,7 +69,7 @@
 
 <!-- HÀNG 1: Bản đồ trạm (2/3) + Bảng Trạm (1/3) (DASHBOARD_UI_PLAN §2.1) -->
 <section class="overview-grid-row row-1">
-  {% call w.widget_card(id="widget-station-map", title="Bản đồ trạm", subtitle=asof_sub ~ " – Vị trí và trạng thái realtime") %}
+  {% call w.widget_card(id="widget-station-map", title="Bản đồ Tủ đổi pin VinFast", subtitle="43.298 vị trí tủ đổi pin thực tế trên toàn quốc") %}
     <div id="stations-map" class="map-box" data-vietmap-key="{{ vietmap_key or '' }}"></div>
   {% endcall %}
 

@@ -7,3 +7,6 @@ __pycache__/
 .pytest_cache/
 .env
 
+
+# Dữ liệu tủ đổi pin VinFast (nguồn ngoài, đã được phép dùng; không commit file lớn)
+ase/dashboard/static/vinfast_bss.json.gz
