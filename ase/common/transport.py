@@ -29,6 +29,10 @@ class SimClock:
         if self._now is None or t > self._now:  # event đến trễ không làm clock lùi
             self._now = t
 
+    def is_set(self) -> bool:
+        """Đã có mốc thời gian chưa (chưa có thì `now()` ném lỗi)."""
+        return self._now is not None
+
     def now(self) -> datetime:
         if self._now is None:
             raise RuntimeError("clock chưa khởi tạo")

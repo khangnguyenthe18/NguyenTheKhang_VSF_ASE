@@ -93,7 +93,7 @@ async def run_detector(
     )
     async for ev in ev_source.events():
         handle(tracker.on_event(ev))
-        if sim_clock._now is not None:
+        if sim_clock.is_set():
             disp.tick(sim_clock.now())
         if periodic_incidents and (
             len(disp.p1_alerts) > prev_p1 or len(disp.batches) > prev_batches

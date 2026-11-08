@@ -198,7 +198,7 @@ class Classifier:
         )
 
     def classify(self, finding: Finding) -> Classification:
-        if isinstance(self.clock, SimClock) and self.clock._now is None:
+        if isinstance(self.clock, SimClock) and not self.clock.is_set():
             now = ensure_utc(finding.detected_at)
         else:
             now = ensure_utc(self.clock.now())

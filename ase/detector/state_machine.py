@@ -187,7 +187,7 @@ class SessionTracker:
         if self.advance_clock and isinstance(self.clock, SimClock):
             self.clock.advance(occ_utc)
         now: datetime | None
-        if isinstance(self.clock, SimClock) and self.clock._now is None:
+        if isinstance(self.clock, SimClock) and not self.clock.is_set():
             now = None
         else:
             now = ensure_utc(self.clock.now())

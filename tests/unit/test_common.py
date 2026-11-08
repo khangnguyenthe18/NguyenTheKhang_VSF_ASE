@@ -83,3 +83,14 @@ async def test_jsonl_roundtrip_keeps_order_and_clock_monotonic(tmp_path: Path) -
         last = now
     assert seen == ["e1", "e2", "e2", "e3"]  # giữ nguyên thứ tự dòng
     assert clock.now() == T0 + timedelta(seconds=60)
+
+
+def test_simclock_is_set_reflects_whether_clock_was_initialised() -> None:
+    from datetime import UTC, datetime
+
+    from ase.common.transport import SimClock
+
+    clock = SimClock()
+    assert clock.is_set() is False
+    clock.advance(datetime(2026, 11, 4, 10, 0, tzinfo=UTC))
+    assert clock.is_set() is True
