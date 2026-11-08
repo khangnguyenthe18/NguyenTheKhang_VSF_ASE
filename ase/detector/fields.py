@@ -38,6 +38,8 @@ class CoverageReport(BaseModel):
     total_events_processed: int = 0
     total_sessions_seen: int = 0
     max_arrival_lag_seconds: float = 0.0
+    max_lateness_vs_clock_seconds: float = 0.0
+    max_watermark_lag_seconds: float = 0.0
 
 
 class FieldView:

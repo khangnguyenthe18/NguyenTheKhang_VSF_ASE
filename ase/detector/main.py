@@ -53,10 +53,17 @@ async def run_detector(
     clock: SimClock | None = None,
     allowed_lateness_seconds: float = 0.0,
     periodic_incidents: bool = False,
+    advance_clock: bool | None = None,
 ) -> DetectorRun:
     t0 = time.perf_counter()  # chỉ để in thông lượng, không dùng trong logic
     k = knowledge or default_knowledge()
-    sim_clock = clock if clock is not None else SimClock()
+    src_clock = getattr(source, "clock", None) if source is not None else None
+    sim_clock = (
+        clock
+        if clock is not None
+        else (src_clock if isinstance(src_clock, SimClock) else SimClock())
+    )
+    eff_advance_clock = advance_clock if advance_clock is not None else (src_clock is None)
     ctx = ContextStore.from_profile_dir(profile_dir)
     view = FieldView(ctx, preset=preset, knowledge=k)
     tracker = SessionTracker(
@@ -64,6 +71,7 @@ async def run_detector(
         knowledge=k,
         field_view=view,
         allowed_lateness_seconds=allowed_lateness_seconds,
+        advance_clock=eff_advance_clock,
     )
     classifier = Classifier(sim_clock, view, knowledge=k)
     corr = Correlator(view, knowledge=k)
@@ -85,7 +93,8 @@ async def run_detector(
     )
     async for ev in ev_source.events():
         handle(tracker.on_event(ev))
-        disp.tick(sim_clock.now())
+        if sim_clock._now is not None:
+            disp.tick(sim_clock.now())
         if periodic_incidents and (
             len(disp.p1_alerts) > prev_p1 or len(disp.batches) > prev_batches
         ):
@@ -98,7 +107,8 @@ async def run_detector(
     disp.flush_all()
     await disp.drain()
 
-    coverage = build_coverage_report(view, tracker, classifier)
+    wm_lag = float(getattr(ev_source, "max_watermark_lag_seconds", 0.0))
+    coverage = build_coverage_report(view, tracker, classifier, max_watermark_lag_seconds=wm_lag)
     report = write_outputs(
         target, corr=corr, disp=disp, coverage=coverage, notify=notifier is not None
     )
@@ -119,6 +129,9 @@ def format_summary(profile: str, run: DetectorRun) -> str:
         f"=== ASE detector (profile={profile}, fields={c.preset}) → {run.out_dir} ===",
         f"Events     : {c.total_events_processed} (trùng={c.duplicate_events_dropped}, "
         f"đến trễ={c.late_events_handled}, lùi={c.backward_transitions_ignored})",
+        f"Watermark  : lateness_vs_clock={c.max_lateness_vs_clock_seconds:.3f}s, "
+        f"watermark_lag={c.max_watermark_lag_seconds:.3f}s, "
+        f"arrival_lag={c.max_arrival_lag_seconds:.3f}s",
         f"Sessions   : {c.total_sessions_seen}",
         f"Detections : {r.n_detections} "
         + ", ".join(f"{k}={v}" for k, v in r.detections_by_category.items()),
@@ -158,13 +171,21 @@ def main(argv: list[str] | None = None) -> None:
     notifier = NotifierService(settings=settings) if args.notify else None
 
     source: EventSource | None = None
+    sim_clock: SimClock | None = None
+    advance_clock = True
     lateness = 0.0
     periodic = False
     target_out = args.out
     if args.source == "kafka":
         from ase.streaming.kafka_io import KafkaSource
 
-        source = KafkaSource(settings=settings, max_idle_seconds=args.max_idle_seconds)
+        sim_clock = SimClock()
+        source = KafkaSource(
+            settings=settings,
+            max_idle_seconds=args.max_idle_seconds,
+            clock=sim_clock,
+        )
+        advance_clock = False
         lateness = k.detector.stream.allowed_lateness_seconds
         periodic = True
         if target_out is None:
@@ -179,8 +200,10 @@ def main(argv: list[str] | None = None) -> None:
             notifier=notifier,
             speed=args.speed,
             source=source,
+            clock=sim_clock,
             allowed_lateness_seconds=lateness,
             periodic_incidents=periodic,
+            advance_clock=advance_clock,
         )
     )
     print(format_summary(args.profile, run))

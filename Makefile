@@ -3,10 +3,11 @@ PROFILE ?= smoke
 UV ?= $(shell command -v uv 2>/dev/null)
 UV_RUN ?= $(if $(UV),$(UV) run --no-sync,)
 SPEED ?= 60
-# E2E_SPEED=18000 (~5 giờ mô phỏng/giây, ~7s cho 24h của smoke) kết hợp nhường 25ms ở bước
-# chuyển MQTT -> Kafka giúp bản tin bước 6-7 luôn qua bridge vào Kafka trước khi phiên kế tiếp
-# đẩy SimClock, giữ max_arrival_lag_seconds < allowed_lateness_seconds (10s trong detector.yaml).
+# E2E_SPEED=18000 (~5 giờ mô phỏng/giây, ~7s cho 24h của smoke). Ở 18000×, 25ms thời gian thật
+# tương đương 450s mô phỏng: E2E_PATH_YIELD_MS nhường khi chuyển từ bước 6-7 (MQTT -> bridge ->
+# Kafka) sang bước 1-5 (Kafka trực tiếp) để giữ lệch đường đi trong ngưỡng allowed_lateness_seconds.
 E2E_SPEED ?= 18000
+E2E_PATH_YIELD_MS ?= 25
 
 .PHONY: check lint type test sim detect detect-ablation teams dashboard notify-demo mail-up mail-down demo stream-up stream-down stream-demo e2e
 
@@ -90,10 +91,10 @@ e2e: stream-up
 	  $(UV_RUN) python -m ase.streaming.bridge & BRIDGE_PID=$$!; \
 	  $(UV_RUN) python -m ase.detector --profile $(PROFILE) --source kafka --notify --max-idle-seconds 6 & DET_PID=$$!; \
 	  sleep 3.5; \
-	  $(UV_RUN) python -m ase.streaming.publisher --profile $(PROFILE) --speed $(E2E_SPEED); \
+	  $(UV_RUN) python -m ase.streaming.publisher --profile $(PROFILE) --speed $(E2E_SPEED) --path-yield-ms $(E2E_PATH_YIELD_MS); \
 	  wait $$DET_PID; \
 	'
-	@$(UV_RUN) python -c 'import json, pathlib; p = pathlib.Path("data/$(PROFILE)"); j_ids = {json.loads(l)["session_id"] for l in (p / "detections.jsonl").read_text().splitlines() if l}; k_ids = {json.loads(l)["session_id"] for l in (p / "stream" / "detections.jsonl").read_text().splitlines() if l}; cov = json.loads((p / "stream" / "coverage.json").read_text())["coverage"]; lag = cov["max_arrival_lag_seconds"]; print(f"[e2e] JSONL sessions={len(j_ids)}, Kafka sessions={len(k_ids)}, max_arrival_lag_seconds={lag}s"); assert j_ids == k_ids, f"Mismatch! only_jsonl={j_ids - k_ids}, only_kafka={k_ids - j_ids}"; assert lag < 10.0, f"max_arrival_lag_seconds={lag} >= 10.0"'
+	@$(UV_RUN) python -c 'import json, pathlib; from ase.knowledge.loader import default_knowledge; allowed = default_knowledge().detector.stream.allowed_lateness_seconds; p = pathlib.Path("data/$(PROFILE)"); j_ids = {json.loads(l)["session_id"] for l in (p / "detections.jsonl").read_text().splitlines() if l}; k_ids = {json.loads(l)["session_id"] for l in (p / "stream" / "detections.jsonl").read_text().splitlines() if l}; cov = json.loads((p / "stream" / "coverage.json").read_text())["coverage"]; lat = cov["max_lateness_vs_clock_seconds"]; wm_lag = cov["max_watermark_lag_seconds"]; print(f"[e2e] JSONL sessions={len(j_ids)}, Kafka sessions={len(k_ids)}, max_lateness_vs_clock_seconds={lat}s, max_watermark_lag_seconds={wm_lag}s (allowed={allowed}s)"); assert j_ids == k_ids, f"Mismatch! only_jsonl={j_ids - k_ids}, only_kafka={k_ids - j_ids}"; assert lat < allowed, f"max_lateness_vs_clock_seconds={lat} >= {allowed}"'
 
 notify-demo:
 	$(UV_RUN) python -m ase.notifier.demo $(if $(DRY),--dry-run,)

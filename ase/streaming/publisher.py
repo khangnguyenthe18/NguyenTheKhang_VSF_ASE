@@ -36,6 +36,7 @@ from ase.streaming.mqtt_topics import (
 
 CABINET_STEPS: frozenset[Step] = frozenset({Step.RETURN_BATTERY, Step.RECEIVE_BATTERY})
 DEFAULT_SPEED: float = 18000.0
+DEFAULT_PATH_YIELD_MS: float = 25.0
 
 
 @dataclass
@@ -58,6 +59,7 @@ async def run_publisher(
     *,
     settings: Settings | None = None,
     speed: float | None = DEFAULT_SPEED,
+    path_yield_ms: float = DEFAULT_PATH_YIELD_MS,
     include_telemetry: bool = True,
     kafka_sink: KafkaSink | None = None,
     mqtt_client: Any | None = None,
@@ -87,10 +89,10 @@ async def run_publisher(
         sleep_s = 0.0
         if speed is not None and speed > 0 and prev_ts is not None and t_utc > prev_ts:
             sleep_s = (t_utc - prev_ts).total_seconds() / speed
-        if is_kafka_after_mqtt and speed is not None and speed > 0:
-            # Nhường tối thiểu 25ms khi chuyển từ bước 6–7 (MQTT) sang bước 1–5 (Kafka) để
-            # bản tin MQTT kịp qua bridge vào Kafka trước khi event của phiên sau đẩy SimClock.
-            sleep_s = max(sleep_s, 0.025)
+        if is_kafka_after_mqtt and speed is not None and speed > 0 and path_yield_ms > 0:
+            # Nhường tối thiểu path_yield_ms khi chuyển từ bước 6–7 (MQTT) sang bước 1–5 (Kafka)
+            # để bản tin MQTT kịp qua bridge vào Kafka trước khi phiên sau đẩy SimClock.
+            sleep_s = max(sleep_s, path_yield_ms / 1000.0)
         if sleep_s > 0:
             await asyncio.sleep(sleep_s)
         prev_ts = t_utc if prev_ts is None else max(prev_ts, t_utc)
@@ -167,6 +169,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_SPEED,
         help="Hệ số tốc độ phát theo occurred_at (0 = không sleep)",
     )
+    p.add_argument(
+        "--path-yield-ms",
+        type=float,
+        default=DEFAULT_PATH_YIELD_MS,
+        help="Nhường tối thiểu (ms) khi chuyển từ bước MQTT sang Kafka (0 = tắt)",
+    )
     p.add_argument("--no-telemetry", action="store_true", help="Không phát cabinet_telemetry")
     return p.parse_args(argv)
 
@@ -181,11 +189,13 @@ def main(argv: list[str] | None = None) -> None:
             profile_dir,
             settings=settings,
             speed=eff_speed,
+            path_yield_ms=args.path_yield_ms,
             include_telemetry=not args.no_telemetry,
         )
     )
     print(
-        f"[publisher] profile={args.profile} speed={args.speed}: "
+        f"[publisher] profile={args.profile} speed={args.speed} "
+        f"path_yield_ms={args.path_yield_ms}: "
         f"kafka_events={stats.kafka_events}, "
         f"mqtt_events={stats.mqtt_events}, "
         f"mqtt_telemetry={stats.mqtt_telemetry}"

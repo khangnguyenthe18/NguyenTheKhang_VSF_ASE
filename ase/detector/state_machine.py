@@ -93,6 +93,7 @@ class SessionTracker:
         knowledge: Knowledge | None = None,
         field_view: FieldView | None = None,
         allowed_lateness_seconds: float = 0.0,
+        advance_clock: bool = True,
     ) -> None:
         if allowed_lateness_seconds < 0:
             raise ValueError("allowed_lateness_seconds must be >= 0")
@@ -102,6 +103,7 @@ class SessionTracker:
         self.field_view = field_view
         self.allowed_lateness_seconds = float(allowed_lateness_seconds)
         self.allowed_lateness = timedelta(seconds=allowed_lateness_seconds)
+        self.advance_clock = advance_clock
         self.chain = _step_chain(self.sm)
         self.step_idx_map: dict[Step, int] = {s: i for i, s in enumerate(self.chain)}
 
@@ -117,6 +119,7 @@ class SessionTracker:
         self.backward_transitions_ignored: int = 0
         self.total_events_processed: int = 0
         self.max_arrival_lag_seconds: float = 0.0
+        self.max_lateness_vs_clock_seconds: float = 0.0
 
     @property
     def total_sessions_seen(self) -> int:
@@ -181,14 +184,18 @@ class SessionTracker:
         if prev_max is None or occ_utc > prev_max:
             self._max_occurred_at = occ_utc
 
-        if isinstance(self.clock, SimClock):
+        if self.advance_clock and isinstance(self.clock, SimClock):
             self.clock.advance(occ_utc)
-        now = ensure_utc(self.clock.now())
+        now: datetime | None
+        if isinstance(self.clock, SimClock) and self.clock._now is None:
+            now = None
+        else:
+            now = ensure_utc(self.clock.now())
 
         # 1. Dedup theo event_id
         if raw_event.event_id in self._seen_event_ids:
             self.duplicate_events_dropped += 1
-            return self._pop_expired_timers(now)
+            return self._pop_expired_timers(now) if now is not None else []
 
         self._seen_event_ids.add(raw_event.event_id)
         self.total_events_processed += 1
@@ -197,11 +204,19 @@ class SessionTracker:
             lag_s = round((prev_max - occ_utc).total_seconds(), 6)
             if lag_s > self.max_arrival_lag_seconds:
                 self.max_arrival_lag_seconds = lag_s
+        if now is not None and occ_utc < now:
+            lateness_s = round((now - occ_utc).total_seconds(), 6)
+            if lateness_s > self.max_lateness_vs_clock_seconds:
+                self.max_lateness_vs_clock_seconds = lateness_s
 
         ev = self.field_view.mask_event(raw_event) if self.field_view is not None else raw_event
 
-        # Trước khi cập nhật phiên của `ev`, giải phóng các timer có hạn < `occ_utc`
-        findings: list[Finding] = self._pop_expired_timers(occ_utc, strict_before=True)
+        # Trước khi cập nhật phiên của `ev`, giải phóng các timer có hạn < `min(occ_utc, now)`
+        findings: list[Finding] = (
+            self._pop_expired_timers(min(occ_utc, now), strict_before=True)
+            if now is not None
+            else []
+        )
 
         state = self._sessions.get(ev.session_id)
         if state is None:
@@ -229,19 +244,22 @@ class SessionTracker:
                 state.add_event_id(ev.event_id)
             else:
                 self.backward_transitions_ignored += 1
-            findings.extend(self._pop_expired_timers(now))
+            if now is not None:
+                findings.extend(self._pop_expired_timers(now))
             return findings
 
         if state.closed:
             self.backward_transitions_ignored += 1
-            findings.extend(self._pop_expired_timers(now))
+            if now is not None:
+                findings.extend(self._pop_expired_timers(now))
             return findings
 
         if idx == state.current_step_idx and ev.step in state.step_status:
             prev_status = state.step_status[ev.step]
             if not self.sm.status_allowed(prev_status, ev.status):
                 self.backward_transitions_ignored += 1
-                findings.extend(self._pop_expired_timers(now))
+                if now is not None:
+                    findings.extend(self._pop_expired_timers(now))
                 return findings
 
         # 3. Cập nhật trạng thái phiên
@@ -273,7 +291,7 @@ class SessionTracker:
                     error_code=ev.error_code,
                     status=ev.status,
                     occurred_at=occ_utc,
-                    detected_at=now,
+                    detected_at=max(now, occ_utc) if now is not None else occ_utc,
                     event_ids=state.evidence_ids(preferred_last=ev.event_id),
                 )
             )
@@ -293,7 +311,8 @@ class SessionTracker:
                 if nxt is not None:
                     self._schedule_timer(state, nxt, last_at)
 
-        findings.extend(self._pop_expired_timers(now))
+        if now is not None:
+            findings.extend(self._pop_expired_timers(now))
         return findings
 
     def flush(self) -> list[Finding]:

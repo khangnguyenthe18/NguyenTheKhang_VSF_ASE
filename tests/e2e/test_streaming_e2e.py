@@ -13,9 +13,11 @@ from pathlib import Path
 
 import aiomqtt
 import pytest
+from aiokafka.admin import AIOKafkaAdminClient, NewTopic
 
 from ase.common.config import Settings
 from ase.common.models import SwapEvent
+from ase.common.transport import SimClock
 from ase.detector.main import run_detector
 from ase.knowledge.loader import default_knowledge
 from ase.simulator.generator import generate
@@ -77,6 +79,19 @@ async def test_e2e_smoke_kafka_matches_jsonl_and_dedups_and_handles_bad_mqtt(
         knowledge=K,
     )
 
+    # Tạo topic 3 partition như `make stream-up` để kiểm thử per-partition watermark
+    admin = AIOKafkaAdminClient(bootstrap_servers="127.0.0.1:19092")
+    await admin.start()
+    try:
+        await admin.create_topics(
+            [
+                NewTopic(name=ev_topic, num_partitions=3, replication_factor=1),
+                NewTopic(name=tel_topic, num_partitions=1, replication_factor=1),
+            ]
+        )
+    finally:
+        await admin.close()
+
     # 2. Start bridge in background forwarding MQTT -> test Kafka topics
     bridge_sink = KafkaSink(settings=settings, topic=ev_topic, telemetry_topic=tel_topic)
     await bridge_sink.start()
@@ -127,20 +142,24 @@ async def test_e2e_smoke_kafka_matches_jsonl_and_dedups_and_handles_bad_mqtt(
         # Wait briefly for bridge to finish forwarding to Kafka
         await asyncio.sleep(0.8)
 
-        # 3. Run detector consuming from Kafka topic
+        # 3. Run detector consuming from Kafka topic (3 partitions) with watermark SimClock
+        sim_clock = SimClock()
         kafka_src = KafkaSource(
             settings=settings,
             topic=ev_topic,
             group_id=group_id,
             max_idle_seconds=2.5,
+            clock=sim_clock,
         )
         kafka_run = await run_detector(
             smoke_e2e_dir,
             out_dir=tmp_path / "kafka_out",
             knowledge=K,
             source=kafka_src,
+            clock=sim_clock,
             allowed_lateness_seconds=K.detector.stream.allowed_lateness_seconds,
             periodic_incidents=True,
+            advance_clock=False,
         )
     finally:
         bridge_task.cancel()
@@ -169,6 +188,6 @@ async def test_e2e_smoke_kafka_matches_jsonl_and_dedups_and_handles_bad_mqtt(
         == jsonl_run.report.coverage.duplicate_events_dropped + 2
     )
     assert (
-        kafka_run.report.coverage.max_arrival_lag_seconds
+        kafka_run.report.coverage.max_lateness_vs_clock_seconds
         < K.detector.stream.allowed_lateness_seconds
     )

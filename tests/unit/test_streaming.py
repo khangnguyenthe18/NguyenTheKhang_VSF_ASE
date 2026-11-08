@@ -419,7 +419,301 @@ def test_session_tracker_allowed_lateness_prevents_premature_timeout() -> None:
     assert f.detected_at == T0 + timedelta(seconds=331)
 
 
-# --- 6. Regression: run_detector(source=None) vs JsonlSource -----------------
+# --- 6. Per-partition watermark & advance_clock=False (WATERMARK_PLAN §5) ----
+
+
+class _FakePartitionedConsumer:
+    """Consumer giả hỗ trợ `getmany()`, `assignment()`, `highwater(tp)`, `position(tp)`."""
+
+    def __init__(
+        self,
+        batches_seq: list[dict[int, list[_FakeKafkaRecord]]],
+        *,
+        assigned: set[int],
+        highwaters: dict[int, int],
+        initial_positions: dict[int, int] | None = None,
+    ) -> None:
+        self._batches_seq = list(batches_seq)
+        self._assigned = set(assigned)
+        self._highwaters = dict(highwaters)
+        self._positions: dict[int, int] = {p: 0 for p in assigned}
+        if initial_positions:
+            self._positions.update(initial_positions)
+        self.started = False
+        self.stopped = False
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    def assignment(self) -> set[int]:
+        return set(self._assigned)
+
+    def highwater(self, tp: int) -> int | None:
+        return self._highwaters.get(tp)
+
+    async def position(self, tp: int) -> int:
+        return self._positions.get(tp, 0)
+
+    async def getmany(self, timeout_ms: int = 1000) -> dict[int, list[_FakeKafkaRecord]]:
+        _ = timeout_ms
+        if not self._batches_seq:
+            return {}
+        batch = self._batches_seq.pop(0)
+        for tp, recs in batch.items():
+            self._positions[tp] = self._positions.get(tp, 0) + len(recs)
+        return batch
+
+
+async def test_watermark_is_min_across_active_partitions() -> None:
+    # 1. Watermark = min qua các partition (P0 ở 10:05, P1 ở 10:01 -> clock = 10:01)
+    t_10_01 = T0 + timedelta(minutes=1)
+    t_10_05 = T0 + timedelta(minutes=5)
+    ev_p0 = _ev(event_id="p0-1", session_id="s-p0", occurred_at=t_10_05)
+    ev_p1 = _ev(event_id="p1-1", session_id="s-p1", occurred_at=t_10_01)
+
+    # Cả 2 partition vẫn còn backlog (highwater=5 > position=1 sau lô đầu)
+    consumer = _FakePartitionedConsumer(
+        [{0: [_FakeKafkaRecord(encode_event(ev_p0))], 1: [_FakeKafkaRecord(encode_event(ev_p1))]}],
+        assigned={0, 1},
+        highwaters={0: 5, 1: 5},
+    )
+    clock = SimClock()
+    src = KafkaSource(consumer=consumer, clock=clock, max_idle_seconds=0.05)
+
+    seen_clocks: list[datetime | None] = []
+    async for _ in src.events():
+        seen_clocks.append(clock._now)
+
+    # Khi đọc ev_p0: P1 chưa có event nên watermark chưa tiến (None).
+    # Khi đọc ev_p1: cả P0 (10:05) và P1 (10:01) đều đã có event -> watermark = min = 10:01.
+    assert seen_clocks == [None, t_10_01]
+    assert src.max_watermark_lag_seconds == 240.0
+
+
+async def test_watermark_caught_up_partition_does_not_hold_back_and_all_caught_up_uses_max() -> (
+    None
+):
+    # 2. Partition đã đọc hết (position >= highwater) không còn giữ watermark;
+    #    tất cả partition đã đọc hết -> watermark = max.
+    t_10_01 = T0 + timedelta(minutes=1)
+    t_10_05 = T0 + timedelta(minutes=5)
+    ev_p0 = _ev(event_id="p0-1", session_id="s-p0", occurred_at=t_10_01)
+    ev_p1 = _ev(event_id="p1-1", session_id="s-p1", occurred_at=t_10_05)
+
+    # Lô 1: P0 đọc hết (pos=1 >= hw=1). Lô 2: P1 đọc tiếp (pos=1 < hw=2), P0 không giữ watermark.
+    consumer = _FakePartitionedConsumer(
+        [
+            {0: [_FakeKafkaRecord(encode_event(ev_p0))]},
+            {1: [_FakeKafkaRecord(encode_event(ev_p1))]},
+        ],
+        assigned={0, 1},
+        highwaters={0: 1, 1: 2},
+    )
+    clock = SimClock()
+    src = KafkaSource(consumer=consumer, clock=clock, max_idle_seconds=0.05)
+
+    seen_clocks: list[datetime | None] = []
+    async for _ in src.events():
+        seen_clocks.append(clock._now)
+
+    # Ở ev_p0: P1 còn backlog (pos=0 < hw=2) và chưa có event -> None.
+    # Ở ev_p1: P0 đã ở cuối (pos=1 >= hw=1), chỉ còn P1 active -> watermark = 10:05.
+    assert seen_clocks == [None, t_10_05]
+    assert clock.now() == t_10_05
+
+    # Trường hợp cả 2 partition đều đọc tới cuối (pos >= hw): watermark tiến tới max(high_p)
+    consumer_all_done = _FakePartitionedConsumer(
+        [{0: [_FakeKafkaRecord(encode_event(ev_p1))], 1: [_FakeKafkaRecord(encode_event(ev_p0))]}],
+        assigned={0, 1},
+        highwaters={0: 1, 1: 1},
+    )
+    clock2 = SimClock()
+    src2 = KafkaSource(consumer=consumer_all_done, clock=clock2, max_idle_seconds=0.05)
+    _ = [e async for e in src2.events()]
+    assert clock2.now() == t_10_05
+
+
+async def test_watermark_does_not_advance_when_partition_with_backlog_has_no_events() -> None:
+    # 3. Partition có backlog (position < highwater) nhưng chưa đọc được event nào -> chưa tiến
+    t_10_05 = T0 + timedelta(minutes=5)
+    ev_p0 = _ev(event_id="p0-1", session_id="s-p0", occurred_at=t_10_05)
+
+    consumer = _FakePartitionedConsumer(
+        [{0: [_FakeKafkaRecord(encode_event(ev_p0))]}],
+        assigned={0, 1},
+        highwaters={0: 2, 1: 3},  # P1 có backlog (0 < 3) nhưng chưa trả về event nào
+    )
+    clock = SimClock()
+    src = KafkaSource(consumer=consumer, clock=clock, max_idle_seconds=0.05)
+
+    seen_During_Batch: list[datetime | None] = []
+    async for _ in src.events():
+        seen_During_Batch.append(clock._now)
+
+    assert seen_During_Batch == [None]
+    # Chỉ khi kết thúc luồng (idle timeout) mới chốt clock tới max(high_p)
+    assert clock.now() == t_10_05
+
+
+async def test_watermark_never_moves_backward_on_older_event() -> None:
+    # 4. Watermark không bao giờ lùi khi partition chậm gửi thêm event có occurred_at cũ hơn
+    t_10_05 = T0 + timedelta(minutes=5)
+    t_10_03 = T0 + timedelta(minutes=3)
+    t_10_01 = T0 + timedelta(minutes=1)
+    ev_p0 = _ev(event_id="p0-1", session_id="s-p0", occurred_at=t_10_05)
+    ev_p1_a = _ev(event_id="p1-1", session_id="s-p1", occurred_at=t_10_03)
+    ev_p1_b = _ev(event_id="p1-2", session_id="s-p1", occurred_at=t_10_01)  # cũ hơn 10:03
+
+    consumer = _FakePartitionedConsumer(
+        [
+            {
+                0: [_FakeKafkaRecord(encode_event(ev_p0))],
+                1: [_FakeKafkaRecord(encode_event(ev_p1_a))],
+            },
+            {1: [_FakeKafkaRecord(encode_event(ev_p1_b))]},
+        ],
+        assigned={0, 1},
+        highwaters={0: 5, 1: 5},
+    )
+    clock = SimClock()
+    src = KafkaSource(consumer=consumer, clock=clock, max_idle_seconds=0.05)
+
+    seen_clocks: list[datetime | None] = []
+    async for _ in src.events():
+        seen_clocks.append(clock._now)
+
+    assert seen_clocks == [None, t_10_03, t_10_03]
+
+
+async def test_two_sessions_on_two_partitions_no_false_timeout_when_p0_batch_ahead_of_p1() -> None:
+    # 5. Hai phiên ở 2 partition, lô P0 (thời gian muộn) trả về trước lô P1 (thời gian sớm):
+    #    KHÔNG phát sinh timeout giả cho phiên ở P1.
+    # Phiên s_slow ở P1: bước 1 lúc T0, bước 2 lúc T0+10s .. bước 7 lúc T0+60s (hoàn toàn hợp lệ).
+    # Phiên s_fast ở P0: bước 1 lúc T0+500s (vượt xa SLA 60s của s_slow nếu không có watermark!).
+    p1_events = [
+        _ev(
+            event_id=f"slow-{i}",
+            session_id="s_slow",
+            step=step,
+            status="OK",
+            occurred_at=T0 + timedelta(seconds=10 * i),
+        )
+        for i, step in enumerate(
+            [
+                Step.OPEN_APP,
+                Step.SELECT_SERVICE,
+                Step.SCAN_QR,
+                Step.CHECK_ELIGIBILITY,
+                Step.PAYMENT,
+                Step.RETURN_BATTERY,
+                Step.RECEIVE_BATTERY,
+            ]
+        )
+    ]
+    ev_p0_late = _ev(
+        event_id="fast-1",
+        session_id="s_fast",
+        step=Step.OPEN_APP,
+        status="OK",
+        occurred_at=T0 + timedelta(seconds=500),
+    )
+
+    # Lô 1 trả P0 (T0+500s) trước rồi mới tới P1 (T0..T0+60s)
+    consumer = _FakePartitionedConsumer(
+        [
+            {
+                0: [_FakeKafkaRecord(encode_event(ev_p0_late))],
+                1: [_FakeKafkaRecord(encode_event(e)) for e in p1_events],
+            }
+        ],
+        assigned={0, 1},
+        highwaters={0: 2, 1: len(p1_events) + 1},
+    )
+    clock = SimClock()
+    src = KafkaSource(consumer=consumer, clock=clock, max_idle_seconds=0.05)
+    tracker = SessionTracker(
+        clock,
+        knowledge=K,
+        allowed_lateness_seconds=10.0,
+        advance_clock=False,
+    )
+
+    findings = []
+    async for ev in src.events():
+        findings.extend(tracker.on_event(ev))
+
+    # Không có bất kỳ timeout giả nào cho s_slow!
+    assert [f for f in findings if f.session_id == "s_slow"] == []
+
+
+def test_session_tracker_advance_clock_false_caps_timer_pop_and_sets_detected_at_max() -> None:
+    # 6. SessionTracker(advance_clock=False):
+    #    - event có occurred_at > clock.now() không được pop timer vượt trước watermark
+    #    - EXPLICIT_FAILURE có detected_at = max(now, occurred_at)
+    clock = SimClock()
+    clock.advance(T0 + timedelta(seconds=20))
+    tracker = SessionTracker(
+        clock,
+        knowledge=K,
+        allowed_lateness_seconds=10.0,
+        advance_clock=False,
+    )
+
+    # s1 mở app lúc T0 -> hạn chờ bước 2 (SLA 60s) là T0+60s (+10s lateness = T0+70s)
+    ev_s1 = _ev(
+        event_id="s1-1",
+        session_id="s1",
+        step=Step.OPEN_APP,
+        status="OK",
+        occurred_at=T0,
+    )
+    assert tracker.on_event(ev_s1) == []
+
+    # s2 gửi event ở T0+200s (> T0+70s), nhưng watermark (clock.now()) vẫn ở T0+20s:
+    # tracker KHÔNG được tự tăng clock và KHÔNG được pop timer của s1!
+    ev_s2_ahead = _ev(
+        event_id="s2-1",
+        session_id="s2",
+        step=Step.OPEN_APP,
+        status="OK",
+        occurred_at=T0 + timedelta(seconds=200),
+    )
+    assert tracker.on_event(ev_s2_ahead) == []
+    assert clock.now() == T0 + timedelta(seconds=20)
+
+    # EXPLICIT_FAILURE ở s2 lúc T0+210s khi clock=T0+20s -> detected_at = max(now, occ) = T0+210s
+    ev_s2_fail = _ev(
+        event_id="s2-2",
+        session_id="s2",
+        step=Step.SELECT_SERVICE,
+        status="FAILED",
+        error_code="ERR_BACKEND_5XX",
+        occurred_at=T0 + timedelta(seconds=210),
+    )
+    f_fail = tracker.on_event(ev_s2_fail)
+    assert len(f_fail) == 1
+    assert f_fail[0].kind == "EXPLICIT_FAILURE"
+    assert f_fail[0].detected_at == T0 + timedelta(seconds=210)
+
+    # EXPLICIT_FAILURE ở s3 lúc T0+10s khi clock=T0+20s -> detected_at = max(now, occ) = T0+20s
+    ev_s3_fail = _ev(
+        event_id="s3-1",
+        session_id="s3",
+        step=Step.OPEN_APP,
+        status="FAILED",
+        error_code="ERR_BACKEND_5XX",
+        occurred_at=T0 + timedelta(seconds=10),
+    )
+    f_fail3 = tracker.on_event(ev_s3_fail)
+    assert len(f_fail3) == 1
+    assert f_fail3[0].detected_at == T0 + timedelta(seconds=20)
+    assert tracker.max_lateness_vs_clock_seconds == 20.0  # s1 ở T0 so với clock T0+20s
+
+
+# --- 7. Regression: run_detector(source=None) vs JsonlSource -----------------
 
 
 def _sha_dir(d: Path) -> dict[str, str]:
@@ -442,3 +736,16 @@ async def test_run_detector_default_vs_injected_jsonl_source_byte_identical(
     )
 
     assert _sha_dir(r_default.out_dir) == _sha_dir(r_injected.out_dir)
+    # 5 file JSONL của smoke phải giữ nguyên SHA256 tuyệt đối
+    expected_smoke_jsonl_sha = {
+        "alerts.jsonl": "7c6529d1499e4a4200910a3a5ec4af7e1497c76a5dae36b96f819a445d3fa32f",
+        "ase.anomaly.transaction.v0.jsonl": (
+            "f761d303b8d33183ca52281d6ba20d66d41cccf3af56bc91725ddab64d1ab1a7"
+        ),
+        "batches.jsonl": "f074597ed2e8a62f3c4f6724e0d94f784cf49a8cd496060249ce34dace2cf0f0",
+        "detections.jsonl": "8fb59e489f8d7b68db8773d889b9719e81298396d023cd52b652e96e5d206eae",
+        "incidents.jsonl": "4669fee58ed6fd78d42635eefd4711220638ceba2f67ede6032d49cee00f0ebf",
+    }
+    actual_sha = _sha_dir(r_default.out_dir)
+    for fname, sha in expected_smoke_jsonl_sha.items():
+        assert actual_sha[fname] == sha

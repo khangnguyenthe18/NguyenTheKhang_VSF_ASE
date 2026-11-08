@@ -198,7 +198,10 @@ class Classifier:
         )
 
     def classify(self, finding: Finding) -> Classification:
-        now = ensure_utc(self.clock.now())
+        if isinstance(self.clock, SimClock) and self.clock._now is None:
+            now = ensure_utc(finding.detected_at)
+        else:
+            now = ensure_utc(self.clock.now())
         # Ghi nhận tra cứu quốc gia/timezone của trạm cho báo cáo coverage
         self.field_view.station_country_timezone(finding.station_id, finding.session_id)
 
@@ -422,6 +425,8 @@ def build_coverage_report(
     field_view: FieldView,
     tracker: SessionTracker,
     classifier: Classifier,
+    *,
+    max_watermark_lag_seconds: float = 0.0,
 ) -> CoverageReport:
     return CoverageReport(
         preset=field_view.preset,
@@ -434,6 +439,8 @@ def build_coverage_report(
         total_events_processed=tracker.total_events_processed,
         total_sessions_seen=tracker.total_sessions_seen,
         max_arrival_lag_seconds=tracker.max_arrival_lag_seconds,
+        max_lateness_vs_clock_seconds=tracker.max_lateness_vs_clock_seconds,
+        max_watermark_lag_seconds=max_watermark_lag_seconds,
     )
 
 

@@ -1,7 +1,7 @@
-"""`KafkaSource` và `KafkaSink` sau `EventSource`/`EventSink` (STREAMING_PLAN §5).
+"""`KafkaSource` và `KafkaSink` sau `EventSource`/`EventSink` (WATERMARK_PLAN §3.2).
 
-- `KafkaSource`: consumer `aiokafka`, decode `SwapEvent`, **không** tự `clock.advance`, dừng khi
-  idle quá `max_idle_seconds` (đồng hồ thật).
+- `KafkaSource`: consumer `aiokafka`, decode `SwapEvent`, tiến `SimClock` theo per-partition
+  watermark (khi truyền `clock`), dừng khi idle quá `max_idle_seconds` (đồng hồ thật).
 - `KafkaSink`: producer `aiokafka`, key = `session_id`, `acks="all"`.
 - Cả hai nhận client qua constructor để unit test bằng client giả mà không cần broker.
 """
@@ -9,17 +9,51 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
-from typing import Any
+from datetime import datetime
+from typing import Any, Protocol
 
 import structlog
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from ase.common.config import Settings, get_settings
 from ase.common.models import CabinetTelemetry, SwapEvent
+from ase.common.time import ensure_utc
+from ase.common.transport import SimClock
 from ase.streaming.codec import decode_event, encode_event, encode_telemetry
 
 log = structlog.get_logger(__name__)
+
+
+class PartitionProgress(Protocol):
+    """Giao diện hỏi tiến độ từng partition để tính watermark và dễ mock trong unit test."""
+
+    def assigned(self) -> set[Any]: ...
+    def highwater(self, tp: Any) -> int | None: ...
+    async def position(self, tp: Any) -> int: ...
+
+
+class _ConsumerPartitionProgress:
+    """Adapter đọc tiến độ partition trực tiếp từ `AIOKafkaConsumer` (hoặc fake consumer)."""
+
+    def __init__(self, consumer: Any) -> None:
+        self._consumer = consumer
+
+    def assigned(self) -> set[Any]:
+        fn = getattr(self._consumer, "assignment", None)
+        return set(fn()) if callable(fn) else set()
+
+    def highwater(self, tp: Any) -> int | None:
+        fn = getattr(self._consumer, "highwater", None)
+        return fn(tp) if callable(fn) else None
+
+    async def position(self, tp: Any) -> int:
+        fn = getattr(self._consumer, "position", None)
+        if not callable(fn):
+            return 0
+        res = fn(tp)
+        return int(await res) if inspect.isawaitable(res) else int(res)
 
 
 class KafkaSource:
@@ -33,14 +67,19 @@ class KafkaSource:
         group_id: str | None = None,
         max_idle_seconds: float = 10.0,
         consumer: Any | None = None,
+        clock: SimClock | None = None,
+        progress: PartitionProgress | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.topic = topic or self.settings.kafka_events_topic
         self.group_id = group_id if group_id is not None else self.settings.kafka_group_id
         self.max_idle_seconds = max_idle_seconds
         self._consumer = consumer
+        self.clock = clock
+        self._progress = progress
         self.decode_errors: int = 0
         self.messages_read: int = 0
+        self.max_watermark_lag_seconds: float = 0.0
 
     def _build_consumer(self) -> Any:
         return AIOKafkaConsumer(
@@ -64,8 +103,55 @@ class KafkaSource:
             return None
         return ev
 
+    async def _compute_watermark(
+        self,
+        prog: PartitionProgress,
+        high_p: dict[Any, datetime],
+        known_partitions: set[Any],
+        rem_in_batch: dict[Any, int],
+    ) -> datetime | None:
+        if not high_p:
+            return None
+        partitions = set(prog.assigned()) | known_partitions
+        active: list[Any] = []
+        for q in partitions:
+            if rem_in_batch.get(q, 0) > 0:
+                active.append(q)
+                continue
+            hw = prog.highwater(q)
+            pos = await prog.position(q)
+            at_end = hw is not None and pos >= hw
+            if not at_end:
+                active.append(q)
+        for q in active:
+            if q not in high_p:
+                return None  # còn partition có backlog nhưng chưa đọc được event đầu tiên
+        if active:
+            return min(high_p[q] for q in active)
+        return max(high_p.values())
+
+    async def _advance_watermark(
+        self,
+        prog: PartitionProgress,
+        high_p: dict[Any, datetime],
+        known_partitions: set[Any],
+        rem_in_batch: dict[Any, int],
+    ) -> None:
+        if self.clock is None:
+            return
+        wm = await self._compute_watermark(prog, high_p, known_partitions, rem_in_batch)
+        if wm is not None:
+            lag = (max(high_p.values()) - wm).total_seconds()
+            if lag > self.max_watermark_lag_seconds:
+                self.max_watermark_lag_seconds = round(lag, 6)
+            self.clock.advance(wm)
+
     async def events(self) -> AsyncIterator[SwapEvent]:
         consumer = self._consumer if self._consumer is not None else self._build_consumer()
+        prog = self._progress or _ConsumerPartitionProgress(consumer)
+        high_p: dict[Any, datetime] = {}
+        known_partitions: set[Any] = set()
+        rem_in_batch: dict[Any, int] = {}
         if hasattr(consumer, "start"):
             await consumer.start()
         try:
@@ -76,13 +162,36 @@ class KafkaSource:
                     batches: dict[Any, list[Any]] = await getmany_fn(timeout_ms=timeout_ms)
                     if not batches or not any(batches.values()):
                         break
+                    known_partitions.update(batches.keys())
+                    for q, recs in batches.items():
+                        rem_in_batch[q] = len(recs)
                     # Đúng thứ tự consumer nhận: theo offset trong từng partition, các partition
                     # nối tiếp nhau như aiokafka trả về. Không sắp xếp lại theo occurred_at.
-                    for records in batches.values():
+                    for tp, records in batches.items():
                         for msg in records:
                             ev = self._decode_raw(getattr(msg, "value", msg))
-                            if ev is not None:
-                                yield ev
+                            if ev is None:
+                                rem_in_batch[tp] = max(0, rem_in_batch.get(tp, 1) - 1)
+                                if rem_in_batch[tp] == 0:
+                                    await self._advance_watermark(
+                                        prog, high_p, known_partitions, rem_in_batch
+                                    )
+                                continue
+                            occ = ensure_utc(ev.occurred_at)
+                            prev = high_p.get(tp)
+                            if prev is None or occ > prev:
+                                high_p[tp] = occ
+                            await self._advance_watermark(
+                                prog, high_p, known_partitions, rem_in_batch
+                            )
+                            yield ev
+                            rem_in_batch[tp] = max(0, rem_in_batch.get(tp, 1) - 1)
+                            if rem_in_batch[tp] == 0:
+                                await self._advance_watermark(
+                                    prog, high_p, known_partitions, rem_in_batch
+                                )
+                if self.clock is not None and high_p:
+                    self.clock.advance(max(high_p.values()))
                 return
 
             aiter = consumer.__aiter__()
@@ -93,7 +202,17 @@ class KafkaSource:
                     break
                 ev = self._decode_raw(getattr(msg, "value", msg))
                 if ev is not None:
+                    if self.clock is not None:
+                        occ = ensure_utc(ev.occurred_at)
+                        tp = getattr(msg, "partition", 0)
+                        known_partitions.add(tp)
+                        prev = high_p.get(tp)
+                        if prev is None or occ > prev:
+                            high_p[tp] = occ
+                        await self._advance_watermark(prog, high_p, known_partitions, rem_in_batch)
                     yield ev
+            if self.clock is not None and high_p:
+                self.clock.advance(max(high_p.values()))
         finally:
             if hasattr(consumer, "stop"):
                 await consumer.stop()
