@@ -768,3 +768,61 @@ async def test_core_detector_on_smoke_never_reads_ground_truth_and_matches_failu
     # Phát hiện đúng toàn bộ phiên lỗi thật trên smoke
     assert detected_sids == gt_fail_sids
     assert coverage.total_sessions_seen == gt.height
+
+
+def test_classifier_step_timeout_at_cabinet_step_needs_known_uncharged_payment() -> None:
+    """R_INF_STEP_TIMEOUT: timeout không mã ở bước 6/7 + đã biết tiền chưa bị trừ → HARDWARE."""
+    clock = SimClock()
+    t = T0_TIME + timedelta(minutes=5)
+    clock.advance(t)
+
+    def pay(sid: str, captured: bool, callback_at: datetime) -> Payment:
+        return Payment(
+            payment_id=f"P-{sid}",
+            session_id=sid,
+            amount=1000,
+            currency="VND",
+            status="SUCCESS" if captured else "VOIDED",
+            captured=captured,
+            callback_at=callback_at,
+        )
+
+    ctx = ContextStore.from_models(
+        stations=[_station()],
+        sessions=[_session(s) for s in ("S-HW", "S-LATE", "S-STEP3")],
+        payments=[
+            pay("S-HW", False, t - timedelta(minutes=2)),  # đã biết: không trừ tiền
+            pay("S-LATE", True, t + timedelta(minutes=1)),  # callback chưa về tới `now`
+            pay("S-STEP3", False, t - timedelta(minutes=2)),
+        ],
+    )
+
+    def timeout(sid: str, step: Step) -> Finding:
+        return Finding(
+            session_id=sid,
+            station_id="VN-ST-001",
+            cabinet_id="VN-ST-001-CAB-01",
+            step=step,
+            kind="STEP_TIMEOUT",
+            error_code="STEP_TIMEOUT",
+            status="TIMEOUT",
+            occurred_at=t,
+            detected_at=t,
+            event_ids=["evt"],
+        )
+
+    clf = Classifier(clock, FieldView(ctx, preset="ALL", knowledge=K), knowledge=K)
+    hw = clf.classify(timeout("S-HW", Step.RECEIVE_BATTERY))
+    assert (hw.rule_id, hw.category, hw.error_code) == (
+        "R_INF_STEP_TIMEOUT",
+        Category.HARDWARE,
+        "STEP_TIMEOUT",
+    )
+    assert hw.needs_human_review is True and hw.confidence < 1.0
+    # Callback chưa về → không quy cho HARDWARE (có thể là PAID_NOT_DELIVERED callback trễ)
+    assert clf.classify(timeout("S-LATE", Step.RETURN_BATTERY)).category is Category.UNKNOWN
+    # Bước 3 không có trong `timeout_category_by_step`
+    assert clf.classify(timeout("S-STEP3", Step.SCAN_QR)).category is Category.UNKNOWN
+    # Preset T0 thiếu cabinet_id / payment.captured → rule tự tắt
+    t0 = Classifier(clock, FieldView(ctx, preset="T0", knowledge=K), knowledge=K)
+    assert "R_INF_STEP_TIMEOUT" in {r.rule_id for r in t0.disabled_rules}

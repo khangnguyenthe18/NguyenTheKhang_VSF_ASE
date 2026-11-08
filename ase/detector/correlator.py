@@ -130,11 +130,17 @@ class Correlator:
             and inc.first_seen_at - occurred_at <= window
         )
 
+    def _network_wide(self, inc: _Inc) -> bool:
+        """Incident gộp trên toàn mạng: SYSTEM, hoặc mã lỗi trong `network_wide_error_codes`."""
+        return inc.category is Category.SYSTEM or inc.key[0] == "NETWORK"
+
     def _scope_key(self, det: Detection) -> ScopeKey | None:
         code = det.error_code or "-"
         cat = det.category
         if cat is Category.USER:
             return None
+        if det.error_code is not None and det.error_code in self.cfg.network_wide_error_codes:
+            return ("NETWORK", cat.value, code)
         if cat is Category.SYSTEM:
             return ("SYSTEM", code)
         if cat is Category.PAYMENT:
@@ -159,6 +165,8 @@ class Correlator:
             return False
         kind = inc.key[2] if len(inc.key) > 2 else None
         val = inc.key[3] if len(inc.key) > 3 else None
+        if inc.key[0] == "NETWORK":
+            return False  # phạm vi toàn mạng quá rộng để gán phiên UNKNOWN theo cụm
         if inc.category is Category.SYSTEM:
             return True
         if inc.category is Category.PAYMENT:
@@ -368,7 +376,7 @@ class Correlator:
         countries = sorted({d.country for d in dets})
         stations = sorted({d.station_id for d in dets})
         cabinets = sorted({d.cabinet_id for d in dets if d.cabinet_id})
-        if inc.category is Category.SYSTEM and len(countries) > 1:
+        if self._network_wide(inc) and len(countries) > 1:
             return f"{GLOBAL_COUNTRY} ({', '.join(countries)})"
         if len(inc.key) > 3 and inc.key[2] == "provider":
             return f"{inc.key[3]} ({', '.join(countries)})"
@@ -405,7 +413,7 @@ class Correlator:
         stations = {d.station_id for d in dets}
         cabinets = {d.cabinet_id for d in dets}
         slots = {(d.cabinet_id, d.slot_id) for d in dets}
-        is_global = inc.category is Category.SYSTEM and len(countries) > 1
+        is_global = self._network_wide(inc) and len(countries) > 1
         scope = self.scope_label(inc)
         conf = sum(d.confidence for d in dets) / len(dets) if not inc.is_user_spike else 0.5
         span_min = math.ceil((inc.last_seen_at - inc.first_seen_at).total_seconds() / 60)

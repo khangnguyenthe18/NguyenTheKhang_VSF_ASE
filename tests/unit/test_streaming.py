@@ -736,15 +736,16 @@ async def test_run_detector_default_vs_injected_jsonl_source_byte_identical(
     )
 
     assert _sha_dir(r_default.out_dir) == _sha_dir(r_injected.out_dir)
-    # 5 file JSONL của smoke phải giữ nguyên SHA256 tuyệt đối
+    # 5 file JSONL của smoke phải giữ nguyên SHA256 tuyệt đối. Cập nhật khi đổi hành vi có chủ đích
+    # (lần gần nhất: R_INF_STEP_TIMEOUT + gộp PAID_NOT_DELIVERED toàn mạng).
     expected_smoke_jsonl_sha = {
-        "alerts.jsonl": "7c6529d1499e4a4200910a3a5ec4af7e1497c76a5dae36b96f819a445d3fa32f",
+        "alerts.jsonl": "00e8d332139dd66bcf5e3a30f76d62ab89ca5acbcdcae7ebc57a5942cafb4154",
         "ase.anomaly.transaction.v0.jsonl": (
-            "f761d303b8d33183ca52281d6ba20d66d41cccf3af56bc91725ddab64d1ab1a7"
+            "b90c4a845de8af0ee6cc5d0644f14d83b4ae46e0c2f8e48e98dd9e5a13e7c660"
         ),
-        "batches.jsonl": "f074597ed2e8a62f3c4f6724e0d94f784cf49a8cd496060249ce34dace2cf0f0",
-        "detections.jsonl": "8fb59e489f8d7b68db8773d889b9719e81298396d023cd52b652e96e5d206eae",
-        "incidents.jsonl": "4669fee58ed6fd78d42635eefd4711220638ceba2f67ede6032d49cee00f0ebf",
+        "batches.jsonl": "7d67bdf4f2418d601e6b5ce10a1db5015cd09618b9acf5e3ea643d92701fb90c",
+        "detections.jsonl": "ac1206e32eda48368b568678b08a6da3c17e9af4ceddbcbc5f8e7009f70c763d",
+        "incidents.jsonl": "d7bc379830c663c6cc7dde48d122923d370b4d6dbc0a4186cbabc4d7e77f58de",
     }
     actual_sha = _sha_dir(r_default.out_dir)
     for fname, sha in expected_smoke_jsonl_sha.items():

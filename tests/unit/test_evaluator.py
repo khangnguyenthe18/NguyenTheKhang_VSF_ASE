@@ -512,6 +512,28 @@ def test_sf8_three_alerts_for_two_real_p1_incidents_is_1_5() -> None:
     sf8 = compute_sf8(run_data(gts, dets, incidents=incs, alerts=alerts))
     assert (sf8.n_alerts, sf8.n_real_p1, sf8.ratio) == (3, 2, 1.5)
     assert (sf8.by_scenario["pnd"].n_real, sf8.by_scenario["pnd"].n_alerts) == (2, 3)
+    assert (sf8.n_real_p1_by_category, sf8.ratio_by_category) == (2, 1.5)  # cùng 1 nhóm
+
+
+def test_sf8_secondary_definition_counts_each_category_of_a_scenario() -> None:
+    gts = [
+        gt("B", cat=Category.BATTERY_QUALITY, sev=Severity.P1, scenario="th", inst="SCN-T", inj=T),
+        gt("H", cat=Category.HARDWARE, sev=Severity.P1, scenario="th", inst="SCN-T", inj=T),
+        gt("N", cat=Category.HARDWARE, sev=Severity.P2, scenario="th", inst="SCN-T", inj=T),
+    ]
+    dets = [
+        det("B", Category.BATTERY_QUALITY, sev=Severity.P1, inc="INC-B"),
+        det("H", Category.HARDWARE, sev=Severity.P1, inc="INC-H"),
+        det("N", Category.HARDWARE, inc="INC-N"),
+    ]
+    incs = [
+        inc_rec("INC-B", Category.BATTERY_QUALITY, ["B"]),
+        inc_rec("INC-H", Category.HARDWARE, ["H"]),
+    ]
+    alerts = [alert("INC-B", "Battery Ops", T), alert("INC-H", "Field Ops", T)]
+    sf8 = compute_sf8(run_data(gts, dets, incidents=incs, alerts=alerts))
+    assert (sf8.n_real_p1, sf8.ratio) == (1, 2.0)  # số chính: 1 scenario → 2 alert
+    assert (sf8.n_real_p1_by_category, sf8.ratio_by_category) == (2, 1.0)  # số phụ
     assert sf8.passed is False
     one = compute_sf8(run_data(gts[:1], dets[:1], incidents=incs[:1], alerts=alerts[:1]))
     assert one.ratio == 1.0 and one.passed is True

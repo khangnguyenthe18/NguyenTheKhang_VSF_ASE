@@ -228,6 +228,10 @@ def render_markdown(r: EvalReport) -> str:
         f"{r.sf7.team_ok_batches}/{r.sf7.n_batches}.",
         f"- Hợp lệ schema: {r.sf7.schema_ok}/{r.sf7.schema_total}; "
         f"đủ mã GD + giờ địa phương: {r.sf7.render_ok}/{r.sf7.render_total}.",
+        "- Số phụ, định nghĩa cần mentor chốt — incident thật theo (scenario, nhóm lỗi), vì mỗi "
+        f"nhóm đi tới 1 team: SF8 = "
+        f"{'—' if r.sf8.ratio_by_category is None else f'{r.sf8.ratio_by_category:.2f}'} "
+        f"({r.sf8.n_alerts}/{r.sf8.n_real_p1_by_category}).",
         "- Alert P1 / incident P1 thật theo scenario (correlator tách alert theo khoá gộp: nhóm "
         "lỗi + mã lỗi + provider/tủ/lô; incident thật theo ground truth là cả scenario): "
         + (

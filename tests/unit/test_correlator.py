@@ -629,3 +629,33 @@ async def test_pipeline_on_smoke_matches_ground_truth_scenarios(
     assert len(alerts) >= len({r["incident_id"] for r in p1})
     assert (out / "coverage.json").exists()
     assert (out / "ase.anomaly.transaction.v0.jsonl").exists()
+
+
+def test_paid_not_delivered_is_one_network_wide_incident_across_providers() -> None:
+    """SF8: PAID_NOT_DELIVERED gộp theo mã trên toàn mạng, không tách theo provider/nước."""
+    pnd = dict(
+        category=Category.PAYMENT,
+        severity=Severity.P1,
+        code="PAID_NOT_DELIVERED",
+        step=Step.RETURN_BATTERY,
+        rule_id="R_PAID_NOT_DELIVERED",
+    )
+    items = [
+        _cls("N1", "VN-ST-001", T, **pnd),  # type: ignore[arg-type]
+        _cls("N2", "PH-ST-001", T + timedelta(minutes=1), **pnd),  # type: ignore[arg-type]
+        # UNKNOWN cùng bước trong cửa sổ: KHÔNG được gán vào incident toàn mạng
+        _cls(
+            "X1",
+            "VN-ST-002",
+            T + timedelta(minutes=2),
+            category=Category.UNKNOWN,
+            step=Step.RETURN_BATTERY,
+        ),
+    ]
+    corr = _corr(items)
+    evs = [corr.add(c) for c in items]
+    assert evs[0].incident_id == evs[1].incident_id
+    snap = corr.snapshot(evs[0].incident_id or "")
+    assert (snap.country, snap.countries, snap.n_sessions) == (GLOBAL_COUNTRY, ["PH", "VN"], 2)
+    assert corr.detections["X1"].category is Category.UNKNOWN
+    assert corr.detections["X1"].rule_id == "R_UNKNOWN"

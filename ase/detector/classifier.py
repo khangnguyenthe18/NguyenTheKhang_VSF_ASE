@@ -72,6 +72,14 @@ RULE_DEFINITIONS: tuple[RuleDefinition, ...] = (
         reason="Thiếu cabinet_id (T1) hoặc temperature (T3) để suy luận pin trả về quá nhiệt",
     ),
     RuleDefinition(
+        rule_id="R_INF_STEP_TIMEOUT",
+        required_fields=("cabinet_id", "payment.captured"),
+        reason=(
+            "Thiếu cabinet_id (T1) để định vị tủ, hoặc payment.captured (T1) để loại trừ "
+            "PAID_NOT_DELIVERED trước khi quy timeout ở bước tủ cho HARDWARE"
+        ),
+    ),
+    RuleDefinition(
         rule_id="R_INF_CABINET_DISCONNECT",
         required_fields=("cabinet_id", "heartbeat_at"),
         reason="Thiếu trường cabinet_id (T1) hoặc heartbeat_at (T3) để suy luận mất kết nối tủ",
@@ -400,6 +408,25 @@ class Classifier:
                         rule_id="R_INF_ELIG_PACKAGE_EXPIRED",
                         confidence=self.cfg.inferred_confidence,
                     )
+
+        # 3b. Timeout không mã ở bước do tủ phụ trách → nhóm theo `timeout_category_by_step`.
+        # Chỉ khi ĐÃ BIẾT tiền chưa bị trừ (callback đã về, captured=false): nếu callback chưa
+        # về thì có thể là PAID_NOT_DELIVERED với callback trễ → để UNKNOWN cho OPS xem.
+        if finding.kind == "STEP_TIMEOUT" and self.is_rule_enabled("R_INF_STEP_TIMEOUT"):
+            timeout_cat = self.cfg.timeout_category_by_step.get(finding.step)
+            not_charged = self.field_view.payment_captured(finding.session_id, now) is False
+            if timeout_cat is not None and not_charged:
+                return self._build(
+                    finding,
+                    cabinet_id=cab_id,
+                    slot_id=slot_id,
+                    category=timeout_cat,
+                    severity=self.catalog.severity_for("STEP_TIMEOUT"),
+                    error_code="STEP_TIMEOUT",
+                    rule_id="R_INF_STEP_TIMEOUT",
+                    confidence=self.cfg.inferred_confidence,
+                    needs_human_review=True,
+                )
 
         # 4. Không khớp rule nào -> UNKNOWN + needs_human_review
         fallback_code = "STEP_TIMEOUT" if finding.kind == "STEP_TIMEOUT" else code

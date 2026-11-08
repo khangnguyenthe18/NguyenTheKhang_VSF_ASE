@@ -258,6 +258,7 @@ class Countries(_Strict):
 class CorrelatorSpec(_Strict):
     window_minutes: int = Field(gt=0)
     window_minutes_by_category: dict[Category, int] = Field(default_factory=dict)
+    network_wide_error_codes: list[str] = Field(default_factory=list)
     user_spike_window_minutes: int = Field(gt=0)
     user_spike_min_sessions: int = Field(gt=0)
     cluster_confidence_threshold: float = Field(ge=0.0, le=1.0)
@@ -273,6 +274,7 @@ class ClassifierSpec(_Strict):
     catalog_confidence: float = Field(ge=0.0, le=1.0)
     inferred_confidence: float = Field(ge=0.0, le=1.0)
     unknown_confidence: float = Field(ge=0.0, le=1.0)
+    timeout_category_by_step: dict[Step, Category] = Field(default_factory=dict)
 
 
 class NotifySpec(_Strict):
