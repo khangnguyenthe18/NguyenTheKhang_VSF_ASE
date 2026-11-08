@@ -20,6 +20,7 @@ dependencies = [
     "uvicorn>=0.54.0",
     "aiokafka>=0.15.0",
     "aiomqtt>=2.5.1",
+    "scikit-learn>=1.9.1",
 ]
 
 [dependency-groups]

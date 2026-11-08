@@ -9,7 +9,7 @@ SPEED ?= 60
 E2E_SPEED ?= 18000
 E2E_PATH_YIELD_MS ?= 25
 
-.PHONY: check lint type test sim detect detect-ablation teams dashboard notify-demo mail-up mail-down demo stream-up stream-down stream-demo e2e
+.PHONY: check lint type test sim detect detect-ablation eval ablation teams dashboard notify-demo mail-up mail-down demo stream-up stream-down stream-demo e2e
 
 check: lint type test
 
@@ -25,6 +25,25 @@ test:
 
 sim:
 	$(UV_RUN) python -m ase.simulator --profile $(PROFILE)
+
+FIELDS ?= ALL
+detect:
+	$(UV_RUN) python -m ase.detector --profile $(PROFILE) --fields $(FIELDS) $(if $(NOTIFY),--notify,)
+
+detect-ablation:
+	@for f in T0 T0+T1 T0+T1+T2 ALL; do \
+	  $(UV_RUN) python -m ase.detector --profile $(PROFILE) --fields $$f || exit 1; \
+	done
+
+# Evaluator rule-only (EVALUATOR_PLAN): chạy detector (JSONL) rồi đo SF. Với PROFILE=eval chỉ
+# đánh giá split test (10 ngày cuối); các profile khác đánh giá toàn bộ.
+eval: detect
+	$(UV_RUN) python -m ase.evaluator --profile $(PROFILE) $(if $(filter eval,$(PROFILE)),--split test,)
+
+# Field ablation T0 → T3 trên dev: bảng "tập trường → SF2/SF4" (data/dev/ablation/report.md).
+ablation:
+	$(MAKE) detect-ablation PROFILE=dev
+	$(UV_RUN) python -m ase.evaluator.ablation --profile dev
 
 teams:
 	$(UV_RUN) uvicorn ase.notifier.mock_teams.app:app --port 8000
