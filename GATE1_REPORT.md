@@ -100,7 +100,7 @@ Trên `dev` (14.159 phiên, 924 phiên lỗi; tập dùng để chỉnh rule nê
 
 **Ba chỉ tiêu chưa đạt (theo baseline)**
 
-- **SF5 cho P1 (127,8 s):** do `PAID_NOT_DELIVERED` (đã trừ tiền nhưng không nhả pin), lỗi im lặng chỉ lộ ra khi hết SLA 120 s của bước 6. Lỗi quá nhiệt được báo ngay (0 s). Đo trên `dev` (13.393 phiên bình thường): event đầu tiên của bước 6 đến muộn nhất 65 s sau thanh toán (trung vị 37 s); chờ 30 s thì 8.788 phiên bình thường bị báo nhầm, chờ 60 s thì 13, từ 66 s mới 0. Với dữ liệu hiện tại **không có ngưỡng nào vừa an toàn vừa dưới 60 s** (câu hỏi 1).
+- **SF5 cho P1 (127,8 s):** do `PAID_NOT_DELIVERED` (đã trừ tiền nhưng không nhả pin), lỗi im lặng chỉ lộ ra khi hết SLA 120 s của bước 6. Lỗi quá nhiệt được báo ngay (0 s). Đo trên `dev` (13.235 phiên không lỗi đã thanh toán): event đầu tiên của bước 6 đến muộn nhất 65 s sau thanh toán (trung vị 37 s); chờ 30 s thì 8.685 phiên bị báo nhầm, chờ 60 s thì 12, từ 66 s mới 0. Với dữ liệu hiện tại **không có ngưỡng nào vừa an toàn vừa dưới 60 s** (câu hỏi 1).
 - **SF7 đúng team (99,0%):** 11 dòng bị gửi nhầm IT Ops vì chưa phân loại được: 8 phiên `step_timeout` (đúng ra Field Ops), 2 `thermal_overload` (Battery Ops), 1 `peak_no_charged_battery` (Business Ops). Sau điều chỉnh còn 3.
 - **SF8 (3,40):** correlator tách một sự cố thành nhiều alert: `PAID_NOT_DELIVERED` tách theo provider (13 alert cho 3 sự cố), `thermal_overload` 4 alert cho 2 sự cố. Sau điều chỉnh còn `thermal_overload` báo 2 team (Battery Ops và Field Ops) ở 2 trạm, về vận hành là hợp lý; nếu coi *1 sự cố thật = (scenario, nhóm lỗi)* thì SF8 = 1,00 (câu hỏi 2).
 
@@ -132,7 +132,7 @@ Trên `dev` (14.159 phiên, 924 phiên lỗi; tập dùng để chỉnh rule nê
 | 1 | `error_code`, `payment.captured`, `payment_provider` (T1) | Tra danh mục lỗi → nhóm, mức; phát hiện đã trừ tiền không nhả pin (P1); khoanh vùng sự cố theo provider | Microservice (Kafka) |
 | 1 | `cabinet_id`, `slot_id` (T1) | Khoanh vùng tủ/khoang, gộp incident thiết bị | Thiết bị (MQTT) |
 | 2 | `user_id` hash (T2) | Nợ cước, hết hạn gói (BUSINESS) | Microservice (Kafka) |
-| 2 | `battery_id`, `lot_id`, `soh` (T2) · `soc` (T2) | Lô pin SOH thấp · pin xuất SOC thấp | ERP/MES · Thiết bị (MQTT) |
+| 2 | `lot_id`, `soh` (T2) · `battery_id`, `soc` (T2) | Lô pin SOH thấp · định danh pin, pin xuất SOC thấp | ERP/MES · Thiết bị (MQTT) |
 | 3 | `door_state`, `battery_detected`, `heartbeat_at`, `temperature` (T3) | Kẹt cửa, cảm biến khoang, mất kết nối tủ, quá nhiệt (P1) | Thiết bị (MQTT) |
 | — | `app_version`, `latency_ms` (T2), `hw_error_code` (T3) | Chưa có rule dùng; giữ làm bằng chứng cho LLM (SF6) | Microservice · Thiết bị |
 
@@ -197,6 +197,6 @@ Trường bắt buộc (T0): `session_id`, `occurred_at`, `step`, `status`, `sta
 | Sau điều chỉnh `eval`/test, `dev` | `data/eval/eval/report.json`, `data/dev/eval/report.json` | như trên, thêm `sf8.ratio_by_category`, `sf8.by_scenario` |
 | Ablation (mục 4) | `data/dev/ablation/baseline/report.json`, `data/dev/ablation/report.json` | `rows[].sf2`, `rows[].sf4`, `rows[].n_unknown`, `rows[].disabled_rules`, `minimal_preset`, `first_ok_by_category`, `tier_gain_sf4` |
 | Luồng Kafka | `data/smoke/stream/coverage.json`, `data/dev/stream/coverage.json` và dòng `[e2e]` của `make e2e` | `coverage.max_lateness_vs_clock_seconds`, `coverage.late_events_handled`, `n_p1_alerts`, `n_batches`, `send_errors` |
-| Ngưỡng chờ bước 6; độ trễ phát hiện Kafka vs JSONL; tài nguyên | đo riêng trên `dev` (13.393 phiên bình thường) · so `data/<profile>/stream/detections.jsonl` với `data/<profile>/detections.jsonl` · `docker stats --no-stream` | — |
+| Ngưỡng chờ bước 6; độ trễ phát hiện Kafka vs JSONL; tài nguyên | đo riêng trên `dev` (13.235 phiên không lỗi đã thanh toán) · so `data/<profile>/stream/detections.jsonl` với `data/<profile>/detections.jsonl` · `docker stats --no-stream` | — |
 
 File baseline ghi `git_sha = bd02fcd` vì sinh ra trước khi commit `c92f61f`; số đã tái tạo từ đúng cây mã `c92f61f` và khớp hoàn toàn (trừ `git_sha`). Baseline `dev` chưa có trường `sf8.by_scenario` (thêm sau), các giá trị chung giống nhau. Các số "sau điều chỉnh" chạy lại ở `db74476` và không đổi.
