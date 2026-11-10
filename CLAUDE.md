@@ -7,14 +7,43 @@
 
 ## 1. Tóm tắt dự án
 
-**ASE** là AI Agent giám sát hệ thống vận hành đổi pin xe máy điện (Battery Swap Station – BSS) của VinFast:
+**ASE** là **AI Agent hỗ trợ vận hành** hệ thống đổi pin xe máy điện (Battery Swap Station – BSS) của VinFast, làm việc trên màn hình **Danh sách giao dịch đổi pin** (1 dòng/giao dịch):
 
-- Đọc dữ liệu vận hành (**read-only**), phát hiện **giao dịch lỗi và bất thường realtime**.
-- **Phân loại** lỗi theo nhóm (hệ thống, người dùng, nghiệp vụ, thiết bị, thanh toán, chất lượng pin) và mức độ P1/P2/P3.
-- **Gợi ý** nguyên nhân khả nghi + hướng xử lý (LLM + runbook chọn theo `error_code`).
-- **Thông báo** cho OPS qua **Mail + Microsoft Teams**, kèm mã giao dịch và giờ/ngày/tháng/năm.
-- Sinh **open point + đề xuất** hằng tuần (về vận hành và về chính AI).
-- **Con người (OPS) xác thực. AI chỉ gợi ý, không bao giờ tự thực thi hành động.**
+1. **Kiểm tra lỗi hệ thống, phân tích chuyên sâu**: quét danh sách giao dịch **30 phút/lần** (read-only), tìm giao dịch thất bại và giao dịch kẹt, gộp thành sự cố, so với nền.
+2. **Cảnh báo cho OPS** qua **email, Teams, ticket**: mỗi lần quét tối đa 1 mail + 1 card (không spam).
+3. **Ticket trên ManageEngine (ME) bản trial**; trước khi có portal thì dùng ticket giả lập.
+4. **Customer-facing, cải thiện chất lượng vận hành**: khách bị ảnh hưởng, MTTA/MTTR, open point.
+5. **Báo cáo tổng kết tuần/tháng**: Top 5/Top 10 lỗi, mỗi lỗi chiếm bao nhiêu % trên tổng số phiên lỗi.
+
+**Con người (OPS) xác thực. AI chỉ gợi ý, không bao giờ tự thực thi hành động.**
+
+Plan chi tiết, lịch và việc từng giai đoạn: **`docs/OPS_AGENT_PLAN.md`** (đọc trước khi code).
+
+### Hướng mới từ 10/11 (ưu tiên hơn mọi mục mâu thuẫn bên dưới)
+
+| Chủ đề | Quyết định của chủ dự án |
+|---|---|
+| Nguồn dữ liệu | Danh sách giao dịch đổi pin: trạng thái `Tạo mới` → `Đưa pin vào` → `Hoàn thành` / `Thất bại`; cột như màn hình thật (mã trạm, mã tủ, S/N tủ, mã GD eMSP, mã GD trên tủ, ngày thực hiện, lý do lỗi, S/N + connector + SOH/SOC pin cũ và mới, thời gian pin vào/ra) |
+| Bảng mã lỗi | `ase/knowledge/error_catalog_v1.yaml` (66 mã, Charge core, tủ CC_06_P / CC_12_P) là **chuẩn duy nhất, giữ nguyên văn**. **KHÔNG thêm cột, KHÔNG đổi mức, KHÔNG thêm/bớt mã, không đề xuất chỉnh sửa.** Code chỉ đọc |
+| Mức cảnh báo | Cột "Mức Độ Cảnh Báo" của bảng: `High` / `Low`. Bỏ P1/P2/P3 và 7 nhóm lỗi (category) |
+| Mã ngoài bảng | Giữ nguyên mã, ghi "mã ngoài bảng chuẩn", cần người kiểm tra; không tự gán mức |
+| Nhịp quét | **30 phút/lần** (ý mentor, tránh spam OPS). Không còn cảnh báo tức thời hay tin gom 15 phút |
+| Người nhận | **Một đội OPS** nhận mọi cảnh báo và ticket; CSKH nhận danh sách khách bị ảnh hưởng |
+| Mail / Teams | Giả lập: Mailpit (`ops@ase.local`, `cskh@ase.local`, gửi từ `ase-agent@ase.local`) + mock Teams. Chuyển sang thật chỉ bằng cấu hình (plan, mục "Chuyển sang mail và Teams thật") |
+| Ticket | `TicketClient`: `MockTicketClient` trước; `ManageEngineClient` khi chủ dự án có portal trial. 1 ticket/sự cố, tái diễn → thêm ghi chú |
+| Báo cáo kỳ | Tuần (08:00 thứ Hai giờ VN) và tháng (08:00 ngày 1): **chỉ gửi mail tự động**, theo từng hệ thống BSS (VN, PH, ID) và toàn mạng |
+| Dashboard | `/dashboard` = Danh sách giao dịch đổi pin (bộ lọc, xuất CSV) + Bản đồ trạm + Trạm & Tủ. Các trang thống kê khác đã bỏ. `/` mở thẳng dashboard (UI mock Teams tắt, bật bằng `ASE_MOCK_TEAMS_UI=true`) |
+| Pipeline cũ | Detector event 7 bước, correlator theo category, MQTT/Kafka: **đóng băng** sau Gate 1, không phát triển tiếp; xoá hay giữ sẽ hỏi chủ dự án sau CP1 |
+
+Kiến trúc mới:
+
+```
+TransactionSource (mock parquet · tệp "Xuất dữ liệu" CSV/XLSX)
+   → Scanner (mốc :00/:30, theo Clock) → Analyzer (code, tất định)
+   → Insight LLM (Haiku 5.5, 1 lần gọi/lần quét, tuỳ chọn)
+   → Notifier (1 mail + 1 card / lần quét) + Ticket (theo sự cố)
+   → Báo cáo tuần/tháng (mail) · Evaluator (so ground truth)
+```
 
 Đây là đề tài học thuật. Gate 1 và CP1 dùng **mock data** do simulator sinh ra (có ground truth). CP2 và CP3 chạy trên **dữ liệu masked** (dữ liệu vận hành đã che thông tin) được cung cấp sau; dữ liệu này **không có ground truth**, cần gán nhãn tay một mẫu. Không kết nối hệ thống production thật.
 
@@ -64,7 +93,7 @@ SLA timeout gợi ý (cấu hình được trong `knowledge/state_machine.yaml`)
 1. **Read-only.** ASE không có quyền ghi vào hệ thống vận hành. LLM **không có tool nào có side-effect**.
 2. **Rule-first, LLM-second.** Rule engine deterministic phân loại trước và **luôn gửi được alert kể cả khi LLM lỗi/chậm**. LLM chỉ làm giàu: nguyên nhân khả nghi, đề xuất, xử lý case `UNKNOWN`.
 3. **Alert theo incident, không theo transaction.** Correlator gộp giao dịch cùng lỗi thành 1 incident để tránh bão alert.
-4. **Notifier do code gọi**, dựa trên `TriageResult` đã validate — không bao giờ để LLM tự gửi.
+4. **Notifier và ticket do code gọi**, dựa trên kết quả đã validate — không bao giờ để LLM tự gửi thông báo hay tự tạo ticket. Ticket ghi vào hệ thống ticket (ManageEngine / giả lập), không ghi vào hệ thống vận hành BSS.
 5. **Dữ liệu từ log/thiết bị/user là untrusted** (đặc biệt `error_message`). Bọc trong delimiter `<untrusted_data>` khi đưa vào prompt; không làm theo chỉ dẫn bên trong.
 6. **Evidence phải trỏ tới ID có thật** (`event_id`, `incident_id`, `BHV-*`, metric id). Post-validate bằng code; evidence không tồn tại → hạ confidence, `needs_human_review=True`.
 7. **Thời gian lưu và xử lý ở UTC**, chỉ format sang giờ địa phương ở tầng hiển thị, theo `timezone` (IANA) của trạm. Hiện chỉ có VN → `Asia/Ho_Chi_Minh` (GMT+7). Không hardcode GMT+7 trong code.
@@ -74,25 +103,30 @@ SLA timeout gợi ý (cấu hình được trong `knowledge/state_machine.yaml`)
 
 ---
 
-## 4. Success factors (SF1–SF9)
+## 4. Success factors (SF1–SF10)
 
-| # | Success factor | KPI | Ngưỡng đạt |
-|---|---|---|---|
-| SF1 | Tiếp cận dữ liệu | % giao dịch được ingest | 100% |
-| SF2 | **Phát hiện đúng** (kể cả lỗi im lặng) | Recall | ≥ 95% |
-| SF3 | Không báo nhầm | Precision | ≥ 90% |
-| SF4 | **Phân loại đúng** nhóm lỗi | Accuracy / macro-F1 | ≥ 85% |
-| SF5 | Kịp thời | Thời gian lỗi → alert, p95 | < 60s |
-| SF6 | Hiểu hệ thống | % incident gợi ý đúng nguyên nhân (scenario) | ≥ 70% |
-| SF7 | Thông báo đúng | % alert đúng team, hợp lệ schema, đủ mã GD + thời gian | 100% |
-| SF8 | Không gây nhiễu | Số alert / số incident thật | ≤ 1.2 |
-| SF9 | An toàn | Số action ghi; % evidence không tồn tại; % prompt injection thành công | 0 / 0% / 0% |
+| # | Chỉ tiêu | Ngưỡng đạt |
+|---|---|---|
+| SF1 | % giao dịch trong các cửa sổ quét được đọc | 100% |
+| SF2 | Recall giao dịch lỗi + kẹt | ≥ 95% |
+| SF3 | Precision | ≥ 90% |
+| SF4 | Đúng mã + mức theo bảng chuẩn; mỗi lần lặp kịch bản ↔ 1 sự cố | ≥ 85% |
+| SF5 | Thời gian từ lúc lỗi tới thông báo, p95 | ≤ 35 phút (1 chu kỳ quét + xử lý) |
+| SF6 | % sự cố LLM gợi ý đúng nguyên nhân (kịch bản) | ≥ 70% |
+| SF7 | Thông báo hợp lệ, đủ mã giao dịch + giờ địa phương | 100% |
+| SF8 | Số mail mỗi lần quét; ticket trùng | ≤ 1; 0 |
+| SF9 | Ghi vào hệ thống vận hành; evidence không tồn tại; prompt injection thành công | 0 / 0% / 0% |
+| SF10 | Báo cáo tuần/tháng: tổng % và số case khớp dữ liệu | 100% |
+
+(Định nghĩa lại ngày 10/11 cho hướng quét danh sách giao dịch; số đo Gate 1 theo định nghĩa cũ giữ làm "baseline v0".)
 
 Mọi chỉ tiêu được đo trên **2 cấu hình: rule-only và rule + LLM** để chứng minh đóng góp của LLM. Chỉ tiêu chưa đạt → open point nhóm `AI_SYSTEM`.
 
 ---
 
 ## 5. Kiến trúc
+
+> **Pipeline cũ (trước 10/11), đã thay bằng §1 "Hướng mới từ 10/11".** Nội dung dưới đây mô tả code Gate 1 đang đóng băng, chỉ để tham khảo; không phát triển tiếp.
 
 ```
 Simulator (mock, ASE) ──┐          Log generator (Võ Doanh Nhân) ──┐
@@ -123,6 +157,8 @@ Simulator (mock, ASE) ──┐          Log generator (Võ Doanh Nhân) ──�
 Giai đoạn đầu (bước 1–6 ở mục 15) **dùng file JSONL**, không dựng broker. Mỗi topic là một file: `data/<profile>/<topic>.jsonl` (vd `data/dev/ase.swap.events.jsonl`). Đối tác đọc chung các file này ở điểm tích hợp I1.
 
 Kafka/Redpanda chỉ thêm khi tích hợp realtime với đối tác (I2–I4) hoặc demo streaming: viết `KafkaSource`/`KafkaSink` cùng interface, detector giữ nguyên.
+
+**Cập nhật 07/11 (chủ dự án chốt):** mô phỏng luồng BSS mentor đã xác nhận ngay trong Gate 1: thiết bị → **MQTT (Mosquitto, giả lập AWS IoT Core)** → cầu nối Python → **Kafka (Redpanda)** ← microservice (event bước 1–5). Detector đọc qua `KafkaSource`. Evaluator và field ablation **vẫn chạy trên JSONL** để kết quả tái lập được. Chi tiết: `docs/GATE1_PLAN.md` §2, §4.
 
 ```python
 # common/transport.py
@@ -243,111 +279,18 @@ docker-compose.yml
 
 ---
 
-## 6. Phân loại lỗi
+## 6. Bảng mã lỗi chuẩn
 
-### 6.1 Nhóm (Category)
-| Code | Nhóm | Route tới |
-|---|---|---|
-| `SYSTEM` | Hệ thống (API, backend, deploy) | IT Ops |
-| `HARDWARE` | Thiết bị tủ/khoang, kết nối tủ | Field Ops |
-| `PAYMENT` | Cổng thanh toán, đối soát | Payment Ops |
-| `BUSINESS` | Nghiệp vụ (gói thuê, nợ cước, thiếu pin) | Business Ops |
-| `USER` | Thao tác người dùng | **CSKH** (gom mỗi 15 phút, mục 8); không gọi LLM riêng |
-| `BATTERY_QUALITY` | Chất lượng pin (SOC/SOH/BMS) | Battery Ops |
-| `UNKNOWN` | Không match rule | IT Ops, `needs_human_review` |
+**Nguồn duy nhất: `ase/knowledge/error_catalog_v1.yaml`** — bảng mã lỗi BSS của chủ dự án (chụp từ tệp XLSX gốc, đã xác nhận đúng). Catalog v0 và 7 nhóm lỗi trước đây **bỏ hoàn toàn**.
 
-**Mức độ:** P1 = an toàn / tiền / tài sản · P2 = ảnh hưởng dịch vụ · P3 = thống kê.
-
-### 6.2 Error catalog v0
-(Đưa vào `knowledge/error_catalog.yaml`. Nhóm viết tắt: SYS/HW/PAY/BIZ/USR/BAT.)
-
-**Bước 1–2**
-| Mã | Lỗi | Nhóm | Mức | Dấu hiệu |
-|---|---|---|---|---|
-| APP_CRASH | App crash/treo | SYS | P2 | Crash tăng theo app version |
-| AUTH_FAILED | Auth service lỗi | SYS | P2 | 5xx auth, nhiều user |
-| TOKEN_EXPIRED | Hết phiên đăng nhập | USR | P3 | 401 đơn lẻ, login lại OK |
-| ACCOUNT_LOCKED | Tài khoản bị khoá | BIZ | P3 | Cờ khoá |
-| STATION_LIST_FAIL | Không tải được danh sách trạm | SYS | P2 | API station lỗi |
-| STATION_DATA_STALE | App hiển thị sai số pin/trạng thái | SYS | P2 | Lệch với telemetry |
-| STATION_OFFLINE | Trạm offline/bảo trì | HW | P2 | Mất heartbeat |
-| NO_CHARGED_BATTERY | Hết pin đầy | BIZ | P2 | Pin sẵn sàng = 0 |
-
-**Bước 3**
-| Mã | Lỗi | Nhóm | Mức | Dấu hiệu |
-|---|---|---|---|---|
-| QR_INVALID | QR sai/hết hạn | USR | P3 | Lỗi validate |
-| QR_WRONG_STATION | QR không khớp vị trí | USR | P3 | GPS xa trạm |
-| SESS_CREATE_5XX | Session service lỗi | SYS | P2 | 5xx, nhiều trạm cùng lúc |
-| SESS_DUPLICATE | Phiên cũ chưa đóng | SYS | P2 | Phiên mở quá SLA |
-| CABINET_NO_ACK | Tủ không phản hồi lệnh | HW | P2 | Không có ACK |
-| CABINET_BUSY | Tủ đang phục vụ phiên khác | BIZ | P3 | Lock tủ đang giữ |
-
-**Bước 4**
-| Mã | Lỗi | Nhóm | Mức | Dấu hiệu |
-|---|---|---|---|---|
-| ELIG_PACKAGE_EXPIRED | Gói hết hạn | BIZ | P3 | `package_expiry` < now |
-| ELIG_DEBT | Nợ cước | BIZ | P3 | `debt_flag` |
-| ELIG_QUOTA_EXCEEDED | Vượt hạn mức | BIZ | P3 | Đếm lần đổi |
-| ELIG_BATTERY_NOT_OWNED | Pin không thuộc hợp đồng | BIZ | **P1** | Battery ID không khớp |
-| ELIG_SERVICE_ERROR | Eligibility service lỗi | SYS | P2 | 5xx/timeout |
-| ELIG_FALSE_REJECT | Đủ điều kiện nhưng bị từ chối | SYS | P2 | Dữ liệu lệch giữa hệ |
-
-**Bước 5**
-| Mã | Lỗi | Nhóm | Mức | Dấu hiệu |
-|---|---|---|---|---|
-| PAY_GATEWAY_TIMEOUT | Gateway timeout/lỗi | PAY | P2 | Tập trung 1 provider |
-| PAY_DECLINED | Thẻ bị từ chối/không đủ số dư | USR | P3 | Mã từ chối |
-| PAY_USER_CANCEL | Khách huỷ | USR | P3 | Event huỷ |
-| PAY_CALLBACK_LATE | Callback trễ | PAY | P2 | PENDING quá grace window |
-| PAY_CALLBACK_LOST | Mất callback | PAY | **P1** | Provider đã trừ tiền, hệ không ghi nhận |
-| PAY_DOUBLE_CHARGE | Trừ tiền 2 lần | PAY | **P1** | 2 capture/1 session |
-| PAY_WRONG_AMOUNT | Tính sai tiền | SYS | **P1** | Lệch bảng giá |
-
-**Bước 6**
-| Mã | Lỗi | Nhóm | Mức | Dấu hiệu |
-|---|---|---|---|---|
-| SLOT_DOOR_JAM | Khoang không mở | HW | P2 | `door_state` không đổi |
-| SLOT_SENSOR_FAIL | Pin đặt vào không nhận | HW | P2 | Cửa đóng, `battery_detected=false` |
-| SLOT_LOCK_FAIL | Khoang không đóng/khoá | HW | **P1** | Cửa mở quá lâu |
-| USR_RETURN_TIMEOUT | Khách không đặt pin kịp | USR | P3 | Timeout, cảm biến bình thường |
-| RETURN_FOREIGN_BATTERY | Pin trả vào là pin lạ | BIZ | **P1** | Battery ID không khớp |
-| BAT_RETURN_FAULT | Pin cũ lỗi BMS/quá nhiệt | BAT | **P1** nếu quá nhiệt | `hw_error_code`, nhiệt độ |
-| CABINET_DISCONNECT | Tủ mất kết nối giữa phiên | HW | P2 | Heartbeat gián đoạn |
-
-**Bước 7**
-| Mã | Lỗi | Nhóm | Mức | Dấu hiệu |
-|---|---|---|---|---|
-| SLOT_OUT_DOOR_JAM | Khoang pin mới không mở | HW | P2 | Không đổi `door_state` |
-| BAT_LOW_SOC | Pin xuất SOC thấp | BAT | P2 | SOC < ngưỡng |
-| BAT_LOW_SOH | Pin xuất SOH thấp | BAT | P2 | Tập trung theo `lot_id` |
-| BAT_BMS_FAULT | Pin mới lỗi BMS | BAT | **P1** | BMS fault sau xuất |
-| BAT_PAIRING_FAIL | Pin không ghép được với xe | BAT/SYS | P2 | Xe không nhận pin |
-| USR_NOT_COLLECTED | Khách không lấy pin | USR | P2 | Cửa mở, pin còn |
-| ASSET_NOT_ASSIGNED | Pin mới chưa gán cho khách | SYS | **P1** | SUCCESS nhưng không có bản ghi gán |
-
-**Xuyên bước (lỗi im lặng)**
-| Mã | Lỗi | Nhóm | Mức | Dấu hiệu |
-|---|---|---|---|---|
-| STEP_TIMEOUT | Kẹt bước quá SLA | cần triage | P2 | State machine tracker |
-| PAID_NOT_DELIVERED | Trừ tiền nhưng không nhả pin | PAY | **P1** | `captured=true`, phiên FAILED |
-| DELIVERED_NOT_PAID | Nhả pin nhưng chưa thu tiền | PAY | **P1** | Pin xuất, payment fail |
-| SESSION_DANGLING | Phiên không đóng, giữ khoang | SYS | P2 | Mở quá SLA, lock không nhả |
-| ASSET_MISMATCH | Pin lệch sổ tài sản | SYS | **P1** | Đối soát pin theo khoang |
-| CABINET_OVERHEAT | Tủ/khoang quá nhiệt | HW | **P1** | Telemetry nhiệt |
-| SWAP_SLOW | Thành công nhưng quá chậm | SYS/HW | P3 | p95 vượt ngưỡng |
-| USR_RETRY_STORM | User retry liên tục | USR | P3 | ≥ 3 lần/10' |
-| FRAUD_PATTERN | Hành vi đổi pin bất thường | BIZ | **P1** | Anomaly theo user |
-
-### 6.3 Quy tắc phân biệt (mã hoá trong correlator, trước khi gọi LLM)
-- Lỗi **lan rộng** (nhiều trạm/nhiều user cùng lúc) → `SYSTEM` hoặc `PAYMENT`.
-- Lỗi **tập trung** 1 tủ/khoang → `HARDWARE`.
-- Lỗi tập trung theo **lô pin** (`lot_id`) → `BATTERY_QUALITY`.
-- Lỗi **rải rác, đơn lẻ** → `USER`.
-- Khoang không mở: 1 khoang + heartbeat OK → HW; nhiều tủ + trùng deploy → SYS; lệnh gửi nhưng mất heartbeat → HW (kết nối).
-- Thanh toán fail: tập trung 1 provider → PAY; mã từ chối ngân hàng → USR; mọi provider → SYS.
-- Pin SOC thấp: theo lô → BAT; theo bộ sạc/khoang → HW; do xuất sớm giờ cao điểm → BIZ.
-- **Rule ưu tiên cao nhất:** `payment_captured=true` và phiên FAILED/TIMEOUT ngoài bước 5 → `PAYMENT/P1` (`PAID_NOT_DELIVERED`).
+- 5 cột: Mã Lỗi · Mức Độ Cảnh Báo (`High`/`Low`) · Nhà Sản Xuất (Charge core) · Loại Tủ (`CC_06_P`, `CC_12_P`) · Tên cảnh báo.
+- 136 dòng = 66 mã × 2 loại tủ + 4 dòng lặp ở cuối; 12 mã Low, 54 mã High.
+- **Không được sửa, thêm cột, đổi mức, thêm hay bớt mã; không đề xuất chỉnh sửa bảng.** Không chép bảng vào tài liệu hay code: luôn đọc từ file.
+- Tra theo `(mã, loại tủ)`; các dòng giống hệt nhau coi là một.
+- Kết quả cho một giao dịch lỗi = mã + tên cảnh báo + mức + loại tủ + nhà sản xuất, tra từ bảng.
+- Mã không có trong bảng → "mã ngoài bảng chuẩn", đếm trong báo cáo coverage, cần người kiểm tra.
+- Giao dịch thất bại hoặc kẹt mà không có mã → báo "không có mã lỗi"; ASE không tự đặt mã.
+- Gộp sự cố dựa vào **mẫu phân bố** (cùng tủ/connector, cùng trạm, lan rộng nhiều trạm/nước, cùng S/N pin hay lô pin), không dựa vào nhóm lỗi.
 
 ---
 
@@ -481,18 +424,21 @@ Adaptive Card rút gọn, "channel" theo category; P1 đánh dấu người tr�
 - Gửi lại chỉ khi severity tăng; incident đang mở thì append, không gửi mail mới.
 - `USER` không gửi alert tức thời; gửi CSKH theo chu kỳ gom (mục "Lịch gửi thông báo").
 
-### Lịch gửi thông báo (theo ý mentor, chốt 06/11)
-| Loại | Khi nào gửi | Gửi cho ai | Nội dung |
+### Lịch quét và thông báo (ý mentor, chốt 10/11 — thay lịch "P1 ngay + gom 15 phút")
+| Loại | Khi nào | Gửi cho ai | Nội dung |
 |---|---|---|---|
-| **P1** (an toàn / tiền / tài sản) | **Ngay** khi incident mở (SF5 < 60s) | Đúng team theo `routing.yaml` | 1 alert/incident theo mẫu Mail ở trên |
-| **P2 / P3** (trừ USER) | **Gom mỗi 15 phút** (`notify.batch_interval_minutes`, mốc tròn :00/:15/…) | Đúng team; mỗi team **1 tin/chu kỳ**, chỉ khi có lỗi | Mọi lỗi của team trong chu kỳ, nhóm theo incident (mã GD, giờ địa phương trạm, bước, mã lỗi, phạm vi) |
-| **USER** | Gom mỗi 15 phút như trên | **CSKH** | Lỗi người dùng để hỗ trợ khách; không gọi LLM riêng cho từng lỗi |
-| **Báo cáo tổng hợp ngày** | **1 lần/ngày, 18:00 giờ VN** (`Asia/Ho_Chi_Minh`) | Quản lý vận hành + mọi team | Toàn bộ lỗi từ 18:00 hôm trước tới 18:00 hôm nay, mọi nhóm kể cả USER; đếm theo nhóm/nước/trạm, CSV đầy đủ, 1 nhận xét LLM |
+| **Thông báo mỗi lần quét** | Mốc tròn :00 / :30 (`scan.interval_minutes: 30`), **chỉ khi có lỗi** | Đội OPS (`ops@ase.local`) | 1 mail + 1 card Teams: giao dịch thất bại/kẹt mới, nhóm theo sự cố (mã, tên cảnh báo, mức, trạm/tủ, giờ địa phương), CSV đính kèm, mã ticket |
+| **Ticket** | Cùng lần quét | Đội OPS | 1 ticket/sự cố đạt ngưỡng (mặc định: có mã `High`, hoặc ≥ 3 giao dịch, hoặc lặp 2 lần quét liên tiếp); tái diễn → thêm ghi chú |
+| **Khách bị ảnh hưởng** | Cùng nhịp 30 phút, chỉ khi có | CSKH (`cskh@ase.local`) | Khách đã trả pin chưa nhận pin; khách thất bại ≥ 2 lần/ngày (chỉ `user_id` hash) |
+| **Báo cáo tuần** | 08:00 thứ Hai giờ VN, kỳ thứ Hai–Chủ nhật tuần trước | Đội OPS | Top N lỗi (mặc định 5), % trên tổng số phiên lỗi, theo từng hệ thống BSS và toàn mạng; CSV |
+| **Báo cáo tháng** | 08:00 ngày 1 giờ VN, kỳ tháng trước | Đội OPS | Như báo cáo tuần |
 
-- Chu kỳ, giờ báo cáo ngày đặt trong `knowledge/detector.yaml`, không hardcode. Mốc chu kỳ/ngày tính theo `Clock` (SimClock khi replay).
-- Idempotency qua outbox: P1 `incident_id:revision`; tin gom `batch:{team}:{window_start}`; báo cáo ngày `daily:{date}`.
-- LLM: P1 và incident P2/P3 vẫn được triage theo incident (bất đồng bộ; kết quả có trong tin gom kế tiếp hoặc revision của P1); báo cáo ngày 1 lần gọi. Phần LLM làm ở Sprint 1.
-- Chỉ tiêu (cần mentor xác nhận): SF5 < 60s áp cho **P1**; P2/P3/USER tới tay team trong ≤ 1 chu kỳ. SF8 đếm alert P1/incident; tin gom tính 1 tin/team/chu kỳ.
+- Mọi mốc và ngưỡng đặt trong `knowledge/detector.yaml` (khối `scan`, `report`), tính theo `Clock`; không hardcode.
+- Idempotency qua outbox: `scan:{window_start}`; `ticket:{incident_key}`; `report:weekly:{ngày đầu kỳ}`; `report:monthly:{yyyy-mm}`.
+- LLM: tối đa 1 lần gọi mỗi lần quét có sự cố và 1 lần mỗi báo cáo kỳ; LLM lỗi thì vẫn gửi bản rule.
+- Kênh thật: chốt người nhận `ASE_NOTIFY_ALLOWED_RECIPIENTS`; dữ liệu masked ra kênh ngoài cần `ASE_ALLOW_EXTERNAL_NOTIFY_ON_MASKED=true`; ticket lên ME cần `ASE_ALLOW_TICKET_ON_MASKED=true`.
+- Mẫu Mail và mục Notifier phía trên là của pipeline cũ (theo incident + category); mẫu mail mỗi lần quét và mẫu báo cáo kỳ định nghĩa trong `docs/OPS_AGENT_PLAN.md` (việc 2.4, 2.6).
+
 ---
 
 ## 9. Pair contract với Võ Doanh Nhân — **DEFERRED**
@@ -574,6 +520,8 @@ Ví dụ `ase.anomaly.transaction.v0`:
 
 ## 10. Đặc tả mock data & simulator
 
+> **Từ 10/11:** simulator sinh thẳng **danh sách giao dịch** (`swap_transactions.{jsonl,parquet}` + `ground_truth.csv`), đúng định dạng màn hình thật: mã trạm `B.<TỈNH><5 số>`, mã tủ `<mã trạm>.<3 số>`, S/N tủ `BSS-…`, loại tủ CC_06_P/CC_12_P, mã eMSP 24 hex, mã trên tủ tăng dần, S/N pin `BAT…`. Lỗi **chỉ dùng mã trong bảng chuẩn** (§6). Kịch bản mới: xem `docs/OPS_AGENT_PLAN.md` (Giai đoạn 1). Các mục về tầng trường T0–T3, bảng event 7 bước và bảng "Scenario inject" bên dưới thuộc pipeline cũ; phần profile quy mô, quốc gia, múi giờ, seed vẫn áp dụng.
+
 - **Tái lập được:** cố định seed; tập test dùng seed khác tập dev.
 - **Định dạng:** JSONL (replay stream, mỗi topic một file), Parquet (phân tích), CSV (ground truth).
 - Phân bố chung: cao điểm 7–9h và 17–19h; lỗi nền 3–5% (chủ yếu USER); 3 payment provider; 4 app version; 3 loại gói thuê; pin thuộc 6 lô.
@@ -599,7 +547,7 @@ Chất lượng đánh giá phụ thuộc **số case lỗi**, không phải t�
 | `smoke` | CI, unit/e2e test | 2 (VN) | 1 | ~300 | ~300 |
 | `dev` | Viết và chỉnh rule hằng ngày | 5 (VN 2, PH 1, ID 2 [WIB + WITA]) | 14 | ~1.000 | ~14 nghìn |
 | `eval` | Đo SF1–SF9 và ablation | 11 (VN 7, PH 2, ID 2 [WIB + WITA]) | 30 (20 baseline/dev + 10 test) | ~1.500 | ~45 nghìn |
-| `demo` | Chỉ trình diễn dashboard + luồng cảnh báo (`make demo`); **không dùng đo SF** | 40 (VN 28, PH 7, ID 5) | 3 | ~6.000 | ~18 nghìn |
+| `demo` | Chỉ trình diễn dashboard + luồng cảnh báo (`make demo`); **không dùng đo SF**. Trạm VN đặt tại tủ VinFast thật (chọn theo tỷ lệ tỉnh); chỉ ghi telemetry dạng Parquet | 286 (VN 200, PH 48, ID 38; tỷ lệ theo lưu lượng, ~150 phiên/trạm/ngày) | 3 | ~43.000 | ~129 nghìn |
 
 Yêu cầu tối thiểu với `eval` (simulator tự kiểm tra sau khi sinh, in bảng đếm và **báo lỗi nếu không đạt**):
 - Mỗi category có **≥ 50 case lỗi** trong tập test.
@@ -693,7 +641,7 @@ Quy tắc:
 |---|---|
 | Callback thanh toán trễ | Grace window theo provider (vd 90s), delayed check bằng timer |
 | Event trùng/sai thứ tự | Dedup `event_id` (in-memory khi JSONL; Redis SETNX + TTL khi Kafka, partition theo `session_id`); bỏ qua transition lùi |
-| Bão alert | Correlator gom `(station, error_code, 5')`; append vào incident mở |
+| Bão alert | Correlator gom `(station, error_code, 5')`, riêng `SYSTEM` cửa sổ **15'** (chốt 09/11, `detector.yaml`); append vào incident mở |
 | Gửi trùng do retry | Outbox + idempotency `incident_id:revision` |
 | Consumer lag → timeout giả | Theo dõi lag; vượt ngưỡng thì tạm ngừng rule timeout, phát meta-alert |
 | Agent chết im lặng | Heartbeat + synthetic transaction định kỳ |
@@ -712,28 +660,14 @@ Quy tắc:
 
 ## 15. Thứ tự triển khai theo mốc (task cho Claude Code)
 
-### Trước Gate 1 (11/11) — skeleton end-to-end trên mock
-1. `common/` models + `transport.py` (`EventSource`/`EventSink`, `SimClock`, `JsonlSource`/`JsonlSink`) + `knowledge/` YAML (state machine, error catalog, routing).
-2. `simulator/`: profile `smoke` + `dev` trước (`eval` sau), entities, traffic theo giờ, scenario injection, xáo trộn/nhân bản event, ground truth, ghi JSONL + kiểm tra số case tối thiểu.
-3. `detector/`: state machine tracker → rule classifier → correlator (anomaly EWMA có thể để Sprint 1).
-4. `notifier/` tối thiểu: routing + template Mail/Teams → **Mailpit** + **mock Teams**; outbox đơn giản.
-5. `evaluator/`: SF1–SF5, SF7, SF8 cho **rule-only** = baseline metric.
-6. Thí nghiệm giả định rủi ro: **field ablation** theo tầng T0→T3 (mục 10.1), rule-only, báo cáo SF2/SF4 theo category + danh sách trường yêu cầu gửi mentor. Detector có cờ `available_fields` và báo cáo rule bị tắt.
-7. docker-compose tối thiểu: chỉ Mailpit. Một lệnh chạy e2e: `make e2e PROFILE=smoke`.
+Chi tiết từng việc, file và tiêu chí xong: `docs/OPS_AGENT_PLAN.md`. Cuối mỗi ngày: `make check` xanh, dừng lại báo cáo.
 
-### Sprint 1 → CP1 (18/11) — MVP trên mock
-8. `triage/`: `LLMClient` (adapter `anthropic` + `ollama`), `ContextBuilder` cho single-shot, cost guard (mục 17) + chọn runbook theo ánh xạ `error_code` + validate evidence + guardrails + fallback rule.
-9. `feedback/` API + nút trên mock Teams; lưu feedback.
-10. Profile `eval`; bảng SF1–SF9: **rule-only vs rule + Haiku 5.5** (trên mock). Eval chạy qua Batch API.
-
-### CP2 (25/11) — dữ liệu masked
-11. `adapters/masked/`: mapping cấu hình được (YAML: cột nguồn → trường T0–T3) → `SwapEvent`; báo cáo trường thiếu/không map được và tầng đạt được. Viết sẵn khung trước khi có dữ liệu.
-12. Công cụ gán nhãn mẫu (200–300 giao dịch lỗi) cho người gán nhãn → ground truth thủ công; đo SF trên mẫu này. LLM trên dữ liệu masked dùng Haiku 5.5 khi `ASE_ALLOW_EXTERNAL_LLM_ON_MASKED=true`.
-13. `openpoint/` v1: open point 2 nhóm, vòng đời, báo cáo tuần.
-
-### CP3 (09/12) — final
-14. Hoàn thiện SF1–SF9 trên dữ liệu masked, báo cáo đánh giá, tài liệu bàn giao, kịch bản demo.
-15. (Chỉ khi chủ dự án yêu cầu) tích hợp đối tác I1 → I5, Kafka/Redpanda, ablation A/B/C.
+- **Bước 0 (10–11/11):** chốt hiện trạng, tài liệu. Gate 1 (11/11) trình bày skeleton cũ + hướng mới; **không đổi code pipeline cũ trước buổi Gate 1**.
+- **Giai đoạn 1 (11 → 14/11) — nền dữ liệu:** loader bảng mã chuẩn; model `SwapTransaction`; simulator sinh danh sách giao dịch; dashboard đọc bảng này.
+- **Giai đoạn 2 (15 → 18/11, CP1) — agent:** `TransactionSource` + scanner 30 phút + analyzer; thông báo mỗi lần quét (mail + Teams); `MockTicketClient`; báo cáo tuần/tháng; evaluator rule-only.
+- **Giai đoạn 3 (19 → 25/11, CP2):** insight LLM (Haiku 5.5, cost guard §17); `ManageEngineClient` (khi có portal); `ExportFileSource` cho tệp "Xuất dữ liệu" thật; `TeamsWebhookNotifier` (khi có URL webhook); gán nhãn mẫu, đo lại SF.
+- **Giai đoạn 4 (26/11 → 09/12, CP3):** customer-facing (mail CSKH), MTTA/MTTR từ ticket, open point tuần, báo cáo cuối, tài liệu bàn giao, demo.
+- Phần đối tác (§9): vẫn DEFERRED.
 
 ---
 
@@ -747,13 +681,19 @@ Quy tắc:
 - Đã có người gán nhãn mẫu dữ liệu masked.
 - Mail: aiosmtplib → **Mailpit** (Docker, container duy nhất) khi dev/demo; dự án thật trỏ sang SMTP công ty chỉ bằng `.env` (host/port/TLS/auth). Teams: mock Teams.
 - Thông báo (mục 8): **P1 gửi ngay** cho đúng team; **P2/P3 gom mỗi 15 phút** gửi đúng team; **USER gửi CSKH** theo cùng chu kỳ; **báo cáo tổng hợp 1 lần/ngày lúc 18:00 giờ VN** cho quản lý + mọi team. Không gọi LLM riêng cho lỗi USER.
-- Dashboard: nền bản đồ **Vietmap** (vector qua `@vietmap/vietmap-gl-leaflet`, key `ASE_VIETMAP_API_KEY` trong `.env`), không dùng OSM. Profile `demo` (40 trạm) chỉ để trình diễn.
+- Luồng dữ liệu (07/11): mentor xác nhận luồng BSS thật Pin/Tủ (CAN/RS485) → MQTT/AWS IoT Core → Kafka → microservices. Gate 1 mô phỏng **MQTT (Mosquitto) + Kafka (Redpanda)**, thêm `aiokafka`, `aiomqtt`; đánh giá vẫn trên JSONL.
+- Dashboard: nền bản đồ **Vietmap** (vector qua `@vietmap/vietmap-gl-leaflet`, key `ASE_VIETMAP_API_KEY` trong `.env`), không dùng OSM. Profile `demo` (286 trạm, VN 200 trạm đặt tại tủ VinFast thật) chỉ để trình diễn.
 - Phần đối tác: chỉ là điểm cộng, chỉ làm khi chủ dự án yêu cầu. Không sinh `ase.logs.raw` / `app_logs`; dùng `latency_ms` trên event.
 - Quốc gia: **sinh dữ liệu 3 nước đã triển khai** VN, PH, ID (mục 10, "Phạm vi quốc gia"); `smoke` chỉ VN. **Không sinh IN, TH, MY** (mới công bố kế hoạch); thêm sau qua `countries.yaml`. OPS: một đội trung tâm, alert tiếng Việt cho mọi nước, routing theo category.
 
 - Phần cứng: Core Ultra 7 155H, 16GB RAM, không GPU NVIDIA → model local ≤ 7–8B Q4 chạy CPU, LLM bất đồng bộ, không tool loop.
 
+- **Đổi hướng 09–10/11:** ASE là AI Agent hỗ trợ vận hành trên Danh sách giao dịch đổi pin; toàn bộ quyết định ở §1 "Hướng mới từ 10/11" (bảng mã chuẩn giữ nguyên văn, quét 30 phút/lần, một đội OPS, mail giả lập, ticket giả lập trước ManageEngine, báo cáo tuần/tháng chỉ qua mail). Các quyết định cũ về P1/P2/P3, category, gom 15 phút, báo cáo ngày 18:00, MQTT/Kafka chỉ còn áp cho pipeline cũ đã đóng băng.
+
 **Còn mở:**
+- ManageEngine: chủ dự án đăng ký trial sau (cloud hay on-premise, region, khoá API).
+- Tệp "Xuất dữ liệu" mẫu của Danh sách giao dịch (CSV/XLSX) cho `ExportFileSource`.
+- URL webhook Teams và tài khoản SMTP nếu muốn bật kênh thật.
 - Xác nhận máy không có GPU rời (`lspci`, `nvidia-smi`).
 - Thời điểm nhận dữ liệu masked (để kịp viết mapping trước CP2).
 
