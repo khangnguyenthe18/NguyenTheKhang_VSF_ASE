@@ -215,13 +215,44 @@ def test_adaptive_card_content_and_p1_attention() -> None:
     assert header_container["style"] == "attention"
 
     actions = card["actions"]
-    assert isinstance(actions, list) and len(actions) == 3
+    assert isinstance(actions, list) and len(actions) == 4
     urls = [a["url"] for a in actions if isinstance(a, dict)]
     assert urls == [
+        "http://localhost:8000/dashboard?emsp_txn_id=SW20261104-000555",
         "http://localhost:8000/feedback/INC-20261104-0099/confirm",
         "http://localhost:8000/feedback/INC-20261104-0099/wrong_category",
         "http://localhost:8000/feedback/INC-20261104-0099/resolved",
     ]
+
+
+def test_alert_links_open_session_on_dashboard_with_profile() -> None:
+    inc = _make_incident(
+        incident_id="INC-20261104-0100",
+        category=Category.PAYMENT,
+        severity=Severity.P1,
+        error_code="PAID_NOT_DELIVERED",
+        step=Step.PAYMENT,
+        country="VN",
+        timezone="Asia/Ho_Chi_Minh",
+        session_ids=["SW20261104-000777"],
+    )
+    alert = route_incident(inc)
+    assert alert is not None
+    url = "http://ops.example:8000/dashboard?profile=demo&emsp_txn_id=SW20261104-000777"
+
+    mail = render_email(
+        alert, feedback_base_url="http://ops.example:8000/", dashboard_profile="demo"
+    )
+    assert url in mail.text_body
+    assert url.replace("&", "&amp;") in mail.html_body
+    assert "Bước 5 · Thanh toán" in mail.text_body
+
+    card = build_adaptive_card(
+        alert, feedback_base_url="http://ops.example:8000", dashboard_profile="demo"
+    )
+    actions = card["actions"]
+    assert isinstance(actions, list)
+    assert actions[0]["title"] == "Xem giao dịch" and actions[0]["url"] == url
 
 
 class _RecorderNotifier:
@@ -506,11 +537,26 @@ async def test_smtp_dry_run_preview_and_live_config_and_send(
     assert auth_attempts == 1
 
 
+async def test_root_redirects_to_dashboard_while_mock_teams_ui_is_off(tmp_path: Path) -> None:
+    """Chủ dự án tạm bỏ trang mock Teams: "/" mở dashboard; webhook + feedback vẫn chạy."""
+    db_path = tmp_path / "notifier.sqlite"
+    app = create_app(db_path=db_path, settings=Settings(data_dir=tmp_path, notifier_db=db_path))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        root = await client.get("/?channel=it-ops")
+        assert root.status_code == 307 and root.headers["location"] == "/dashboard"
+        posted = await client.post("/webhook/it-ops", json={"incident_id": "INC-X", "revision": 1})
+        assert posted.status_code < 300
+        fb = await client.post("/feedback/INC-X/confirm")
+        assert fb.status_code == 200
+
+
 async def test_mock_teams_webhook_revision_replace_and_feedback(tmp_path: Path) -> None:
     clock = SimClock()
     clock.advance(T0)
     db_path = tmp_path / "notifier.sqlite"
-    app = create_app(db_path=db_path, clock=clock)
+    ui_on = Settings(data_dir=tmp_path, notifier_db=db_path, mock_teams_ui=True)
+    app = create_app(db_path=db_path, clock=clock, settings=ui_on)
     asgi_transport = httpx.ASGITransport(app=app)
 
     settings = Settings(
@@ -596,7 +642,8 @@ async def test_demo_three_sample_incidents_end_to_end(tmp_path: Path) -> None:
     clock = SimClock()
     clock.advance(T0)
     db_path = tmp_path / "notifier.sqlite"
-    app = create_app(db_path=db_path, clock=clock)
+    ui_on = Settings(data_dir=tmp_path, notifier_db=db_path, mock_teams_ui=True)
+    app = create_app(db_path=db_path, clock=clock, settings=ui_on)
     asgi_transport = httpx.ASGITransport(app=app)
 
     settings = Settings(
@@ -824,7 +871,8 @@ async def test_mailpit_e2e_integration(tmp_path: Path) -> None:
     clock = SimClock()
     clock.advance(T0)
     db_path = tmp_path / "notifier.sqlite"
-    app = create_app(db_path=db_path, clock=clock)
+    ui_on = Settings(data_dir=tmp_path, notifier_db=db_path, mock_teams_ui=True)
+    app = create_app(db_path=db_path, clock=clock, settings=ui_on)
     asgi_transport = httpx.ASGITransport(app=app)
 
     settings = Settings(

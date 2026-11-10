@@ -14,38 +14,30 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ase.common.config import Settings
-from ase.common.models import Step
 from ase.dashboard.data import (
-    NotifierSnapshot,
     ProfileData,
     clear_cache,
+    load_profile_data,
 )
 from ase.dashboard.metrics import (
-    build_alarms_page,
     compute_cabinet_online_map,
-    compute_funnel,
     compute_ready_batteries_by_cabinet,
-    compute_reconciliation,
-    compute_revenue_by_currency,
-    compute_stuck_sessions,
     estimate_soc,
     filter_sessions_today,
 )
 from ase.dashboard.models import (
-    AlarmsResponse,
-    AlertsPageResponse,
-    BatteriesPageResponse,
     CabinetTemperatureTimeseriesResponse,
-    GroundTruthPageResponse,
-    IncidentsPlaceholderResponse,
-    MetricsPlaceholderResponse,
     OverviewResponse,
-    PaymentsPageResponse,
-    ReadyBatteriesTimeseriesResponse,
-    SessionDetailResponse,
-    SessionsPageResponse,
     StationDetailResponse,
     StationsListResponse,
+    TransactionsPageResponse,
+)
+from ase.dashboard.transactions import (
+    COLUMNS,
+    TxnFilters,
+    TxnStatus,
+    cabinet_serial,
+    query_transactions,
 )
 from ase.knowledge.loader import default_knowledge
 from ase.notifier.mock_teams.app import create_app
@@ -135,288 +127,6 @@ def test_metrics_filter_sessions_today_by_station_timezone() -> None:
     assert ids == {"S-VN-TODAY", "S-PH-TODAY"}
 
 
-def test_metrics_funnel_7_steps() -> None:
-    t0 = datetime(2026, 11, 4, 10, 0, 0, tzinfo=UTC)
-    steps_list = list(Step)
-    rows = []
-    # Session 1: reaches step 7 OK (with step 5 PENDING then OK)
-    for idx, st in enumerate(steps_list, start=1):
-        if st == Step.PAYMENT:
-            rows.append(
-                {
-                    "event_id": f"E-S1-{idx}-P",
-                    "session_id": "S1",
-                    "user_id": "U1",
-                    "station_id": "VN-ST-001",
-                    "cabinet_id": "VN-ST-001-CAB-01",
-                    "slot_id": None,
-                    "step": st.value,
-                    "status": "PENDING",
-                    "error_code": None,
-                    "error_message": None,
-                    "occurred_at": t0 + timedelta(seconds=idx * 2),
-                }
-            )
-        rows.append(
-            {
-                "event_id": f"E-S1-{idx}",
-                "session_id": "S1",
-                "user_id": "U1",
-                "station_id": "VN-ST-001",
-                "cabinet_id": "VN-ST-001-CAB-01",
-                "slot_id": None,
-                "step": st.value,
-                "status": "OK",
-                "error_code": None,
-                "error_message": None,
-                "occurred_at": t0 + timedelta(seconds=idx * 2 + 1),
-            }
-        )
-    # Session 2: fails at step 3 (3_scan_qr)
-    for idx in (1, 2, 3):
-        st = steps_list[idx - 1]
-        rows.append(
-            {
-                "event_id": f"E-S2-{idx}",
-                "session_id": "S2",
-                "user_id": "U2",
-                "station_id": "VN-ST-001",
-                "cabinet_id": "VN-ST-001-CAB-01",
-                "slot_id": None,
-                "step": st.value,
-                "status": "FAILED" if idx == 3 else "OK",
-                "error_code": "CABINET_OFFLINE" if idx == 3 else None,
-                "error_message": "Offline" if idx == 3 else None,
-                "occurred_at": t0 + timedelta(seconds=idx * 2),
-            }
-        )
-    ev_df = pl.DataFrame(rows, schema=_TEST_EVENT_SCHEMA)
-    funnel = compute_funnel(ev_df, as_of=t0 + timedelta(seconds=60), knowledge=K)
-    assert len(funnel) == 7
-    assert funnel[0].step == Step.OPEN_APP
-    assert funnel[0].reached_count == 2
-    assert funnel[0].ok_count == 2
-    assert funnel[2].step == Step.SCAN_QR
-    assert funnel[2].reached_count == 2
-    assert funnel[2].ok_count == 1
-    assert funnel[2].failed_count == 1
-    assert funnel[4].step == Step.PAYMENT
-    assert funnel[4].ok_count == 1
-    assert funnel[6].step == Step.RECEIVE_BATTERY
-    assert funnel[6].ok_count == 1
-
-
-def test_metrics_stuck_sessions_measured_from_last_event_of_prev_step() -> None:
-    t0 = datetime(2026, 11, 4, 10, 0, 0, tzinfo=UTC)
-    steps_list = list(Step)
-    # Step 5 (5_payment) SLA is sla_seconds=90; Step 6 (6_return_battery) SLA is sla_seconds=120.
-    # Session S-NORMAL-5: step 1..4 OK (step 4 OK at t0+4s), step 5 PENDING at t0+6s,
-    # step 5 OK at t0+50s. At as_of = t0+100s, waiting for step 6 (elapsed 50s <= 120s) -> OK!
-    # Session S-STUCK-5: step 1..4 OK (step 4 OK at t0+4s), step 5 PENDING at t0+6s,
-    # and no OK event at step 5 by as_of = t0+100s (elapsed 96s > 90s SLA of step 5) -> STUCK!
-    rows = [
-        *[
-            {
-                "event_id": f"EN-{idx}",
-                "session_id": "S-NORMAL-5",
-                "user_id": "U1",
-                "station_id": "VN-ST-001",
-                "cabinet_id": "VN-ST-001-CAB-01",
-                "slot_id": None,
-                "step": steps_list[idx - 1].value,
-                "status": "OK",
-                "error_code": None,
-                "error_message": None,
-                "occurred_at": t0 + timedelta(seconds=idx),
-            }
-            for idx in (1, 2, 3, 4)
-        ],
-        {
-            "event_id": "EN-5P",
-            "session_id": "S-NORMAL-5",
-            "user_id": "U1",
-            "station_id": "VN-ST-001",
-            "cabinet_id": "VN-ST-001-CAB-01",
-            "slot_id": None,
-            "step": Step.PAYMENT.value,
-            "status": "PENDING",
-            "error_code": None,
-            "error_message": None,
-            "occurred_at": t0 + timedelta(seconds=6),
-        },
-        {
-            "event_id": "EN-5OK",
-            "session_id": "S-NORMAL-5",
-            "user_id": "U1",
-            "station_id": "VN-ST-001",
-            "cabinet_id": "VN-ST-001-CAB-01",
-            "slot_id": None,
-            "step": Step.PAYMENT.value,
-            "status": "OK",
-            "error_code": None,
-            "error_message": None,
-            "occurred_at": t0 + timedelta(seconds=50),
-        },
-        *[
-            {
-                "event_id": f"ES-{idx}",
-                "session_id": "S-STUCK-5",
-                "user_id": "U2",
-                "station_id": "VN-ST-001",
-                "cabinet_id": "VN-ST-001-CAB-01",
-                "slot_id": None,
-                "step": steps_list[idx - 1].value,
-                "status": "OK",
-                "error_code": None,
-                "error_message": None,
-                "occurred_at": t0 + timedelta(seconds=idx),
-            }
-            for idx in (1, 2, 3, 4)
-        ],
-        {
-            "event_id": "ES-5P",
-            "session_id": "S-STUCK-5",
-            "user_id": "U2",
-            "station_id": "VN-ST-001",
-            "cabinet_id": "VN-ST-001-CAB-01",
-            "slot_id": None,
-            "step": Step.PAYMENT.value,
-            "status": "PENDING",
-            "error_code": None,
-            "error_message": None,
-            "occurred_at": t0 + timedelta(seconds=6),
-        },
-    ]
-    ev_df = pl.DataFrame(rows, schema=_TEST_EVENT_SCHEMA)
-    stations = pl.DataFrame(
-        {
-            "station_id": ["VN-ST-001"],
-            "country": ["VN"],
-            "timezone": ["Asia/Ho_Chi_Minh"],
-        }
-    )
-    as_of = t0 + timedelta(seconds=100)
-    stuck = compute_stuck_sessions(ev_df, stations, None, as_of=as_of, knowledge=K)
-    assert len(stuck) == 1
-    assert stuck[0].session_id == "S-STUCK-5"
-    assert stuck[0].stuck_step == Step.PAYMENT
-    assert stuck[0].sla_seconds == 90
-    assert stuck[0].elapsed_seconds == pytest.approx(96.0)
-
-
-def test_metrics_reconciliation_and_revenue_by_currency() -> None:
-    t0 = datetime(2026, 11, 4, 10, 0, 0, tzinfo=UTC)
-    steps_list = list(Step)
-    # S-OK-VN: captured 9000 VND (RENT_1 in VN), reaches step 7 OK
-    # S-ORPHAN-VN: captured 9000 VND, only reaches step 5 OK (no step 6/7)
-    # S-MISMATCH-PH: captured 999 PHP (RENT_1 in PH is 35 PHP), reaches step 7 OK
-    ev_rows = []
-    for idx, st in enumerate(steps_list, start=1):
-        ev_rows.append(
-            {
-                "event_id": f"E1-{idx}",
-                "session_id": "S-OK-VN",
-                "user_id": "USR-1",
-                "station_id": "VN-ST-001",
-                "cabinet_id": "VN-ST-001-CAB-01",
-                "slot_id": None,
-                "step": st.value,
-                "status": "OK",
-                "error_code": None,
-                "error_message": None,
-                "occurred_at": t0 + timedelta(seconds=idx),
-            }
-        )
-        ev_rows.append(
-            {
-                "event_id": f"E3-{idx}",
-                "session_id": "S-MISMATCH-PH",
-                "user_id": "USR-2",
-                "station_id": "PH-ST-001",
-                "cabinet_id": "PH-ST-001-CAB-01",
-                "slot_id": None,
-                "step": st.value,
-                "status": "OK",
-                "error_code": None,
-                "error_message": None,
-                "occurred_at": t0 + timedelta(seconds=idx),
-            }
-        )
-    for idx in range(1, 6):
-        st = steps_list[idx - 1]
-        ev_rows.append(
-            {
-                "event_id": f"E2-{idx}",
-                "session_id": "S-ORPHAN-VN",
-                "user_id": "USR-1",
-                "station_id": "VN-ST-001",
-                "cabinet_id": "VN-ST-001-CAB-01",
-                "slot_id": None,
-                "step": st.value,
-                "status": "OK",
-                "error_code": None,
-                "error_message": None,
-                "occurred_at": t0 + timedelta(seconds=idx),
-            }
-        )
-    ev_df = pl.DataFrame(ev_rows, schema=_TEST_EVENT_SCHEMA)
-    pay_df = pl.DataFrame(
-        {
-            "payment_id": ["PAY-1", "PAY-2", "PAY-3"],
-            "session_id": ["S-OK-VN", "S-ORPHAN-VN", "S-MISMATCH-PH"],
-            "amount": [9000.0, 9000.0, 999.0],
-            "currency": ["VND", "VND", "PHP"],
-            "status": ["OK", "OK", "OK"],
-            "captured": [True, True, True],
-            "callback_at": [t0, t0, t0],
-        }
-    )
-    ss_df = pl.DataFrame(
-        {
-            "session_id": ["S-OK-VN", "S-ORPHAN-VN", "S-MISMATCH-PH"],
-            "user_id": ["USR-1", "USR-1", "USR-2"],
-            "station_id": ["VN-ST-001", "VN-ST-001", "PH-ST-001"],
-            "cabinet_id": ["VN-ST-001-CAB-01", "VN-ST-001-CAB-01", "PH-ST-001-CAB-01"],
-            "started_at": [t0, t0, t0],
-            "ended_at": [t0 + timedelta(seconds=10)] * 3,
-            "final_status": ["COMPLETED", "IN_PROGRESS", "COMPLETED"],
-            "payment_provider": ["VN_ZALOPAY", "VN_ZALOPAY", "PH_GCASH"],
-            "payment_id": ["PAY-1", "PAY-2", "PAY-3"],
-        }
-    )
-    users_df = pl.DataFrame(
-        {
-            "user_id": ["USR-1", "USR-2"],
-            "package_type": ["RENT_1", "RENT_1"],
-        }
-    )
-    stations_df = pl.DataFrame(
-        {
-            "station_id": ["VN-ST-001", "PH-ST-001"],
-            "country": ["VN", "PH"],
-            "timezone": ["Asia/Ho_Chi_Minh", "Asia/Manila"],
-        }
-    )
-
-    reconcile = compute_reconciliation(
-        ss_df,
-        pay_df,
-        ev_df,
-        users_df,
-        stations_df,
-        as_of=t0 + timedelta(seconds=60),
-        knowledge=K,
-    )
-    by_session = {r.session_id: r for r in reconcile}
-    assert "S-OK-VN" not in by_session
-    assert by_session["S-ORPHAN-VN"].issue_type == "CAPTURED_WITHOUT_DELIVERY"
-    assert by_session["S-MISMATCH-PH"].issue_type == "AMOUNT_MISMATCH"
-    assert by_session["S-MISMATCH-PH"].expected_amount == 35.0
-
-    rev = compute_revenue_by_currency(pay_df, ss_df, as_of=t0 + timedelta(seconds=60))
-    assert rev == {"PHP": 999.0, "VND": 18000.0}
-
-
 # --- 2. FastAPI TestClient tests trên dữ liệu smoke sinh vào tmp_path ------------------------
 
 
@@ -484,92 +194,66 @@ def test_api_and_html_endpoints_return_200_and_validate(
     smoke_env: tuple[Settings, Path],
 ) -> None:
     settings, db_path = smoke_env
-    app = create_app(db_path=db_path, settings=settings)
-    client = TestClient(app)
+    client = TestClient(create_app(db_path=db_path, settings=settings))
 
-    # Static assets
     assert client.get("/static/dashboard/dashboard.css").status_code == 200
     assert client.get("/static/dashboard/dashboard.js").status_code == 200
 
-    # Overview API & HTML
-    r_ov = client.get("/api/dashboard/overview?profile=smoke")
-    assert r_ov.status_code == 200
-    ov = OverviewResponse.model_validate(r_ov.json())
+    ov = OverviewResponse.model_validate(client.get("/api/dashboard/overview?profile=smoke").json())
     assert ov.meta.profile == "smoke"
-    assert ov.kpi_total.stations_total == 2
+    assert len(ov.stations_map) == 2
 
-    # Stations list & detail
-    r_st = client.get("/api/dashboard/stations?profile=smoke")
-    assert r_st.status_code == 200
-    st_list = StationsListResponse.model_validate(r_st.json())
+    st_list = StationsListResponse.model_validate(
+        client.get("/api/dashboard/stations?profile=smoke").json()
+    )
     assert len(st_list.stations) == 2
     first_station_id = st_list.stations[0].station_id
-
-    r_st_det = client.get(f"/api/dashboard/stations/{first_station_id}?profile=smoke")
-    assert r_st_det.status_code == 200
-    st_det = StationDetailResponse.model_validate(r_st_det.json())
+    st_det = StationDetailResponse.model_validate(
+        client.get(f"/api/dashboard/stations/{first_station_id}?profile=smoke").json()
+    )
     assert st_det.station.station_id == first_station_id
-    assert len(st_det.cabinets) >= 2
 
-    # Sessions list & detail
-    r_sess = client.get("/api/dashboard/sessions?profile=smoke")
-    assert r_sess.status_code == 200
-    sess_page = SessionsPageResponse.model_validate(r_sess.json())
-    assert len(sess_page.funnel) == 7
-    assert len(sess_page.recent_sessions) > 0
-    first_session_id = sess_page.recent_sessions[0].session_id
+    temp = CabinetTemperatureTimeseriesResponse.model_validate(
+        client.get("/api/dashboard/timeseries/cabinet-temperature?profile=smoke&hours=1").json()
+    )
+    assert temp.warn_threshold_c == K.error_catalog.thresholds.temp_warn_1_c
 
-    r_sess_det = client.get(f"/api/dashboard/sessions/{first_session_id}?profile=smoke")
-    assert r_sess_det.status_code == 200
-    sess_det = SessionDetailResponse.model_validate(r_sess_det.json())
-    assert sess_det.session.session_id == first_session_id
-    assert len(sess_det.events) > 0
+    txn = TransactionsPageResponse.model_validate(
+        client.get("/api/dashboard/transactions?profile=smoke").json()
+    )
+    assert txn.total > 0 and len(txn.rows) == 20
 
-    # Payments, Batteries, Alerts, Incidents, Metrics, Ground-Truth APIs
-    r_pay = client.get("/api/dashboard/payments?profile=smoke")
-    assert r_pay.status_code == 200
-    PaymentsPageResponse.model_validate(r_pay.json())
-
-    r_bat = client.get("/api/dashboard/batteries?profile=smoke")
-    assert r_bat.status_code == 200
-    BatteriesPageResponse.model_validate(r_bat.json())
-
-    r_al = client.get("/api/dashboard/alerts?profile=smoke")
-    assert r_al.status_code == 200
-    al = AlertsPageResponse.model_validate(r_al.json())
-    assert al.stats.total_cards == 1
-
-    r_inc = client.get("/api/dashboard/incidents?profile=smoke")
-    assert r_inc.status_code == 200
-    IncidentsPlaceholderResponse.model_validate(r_inc.json())
-
-    r_met = client.get("/api/dashboard/metrics?profile=smoke")
-    assert r_met.status_code == 200
-    MetricsPlaceholderResponse.model_validate(r_met.json())
-
-    r_gt = client.get("/api/dashboard/ground-truth?profile=smoke")
-    assert r_gt.status_code == 200
-    gt = GroundTruthPageResponse.model_validate(r_gt.json())
-    assert gt.total_sessions > 0
-
-    # HTML pages
-    html_paths = [
+    for path in (
         "/dashboard?profile=smoke",
+        "/dashboard/map?profile=smoke",
         "/dashboard/stations?profile=smoke",
         f"/dashboard/stations/{first_station_id}?profile=smoke",
-        "/dashboard/sessions?profile=smoke",
-        f"/dashboard/sessions/{first_session_id}?profile=smoke",
-        "/dashboard/payments?profile=smoke",
-        "/dashboard/batteries?profile=smoke",
-        "/dashboard/alerts?profile=smoke",
-        "/dashboard/incidents?profile=smoke",
-        "/dashboard/metrics?profile=smoke",
-        "/dashboard/ground-truth?profile=smoke",
-    ]
-    for path in html_paths:
+    ):
         resp = client.get(path)
         assert resp.status_code == 200, f"Failed GET {path}: {resp.text}"
         assert "<!DOCTYPE html>" in resp.text
+
+
+def test_removed_statistics_pages_are_gone(smoke_env: tuple[Settings, Path]) -> None:
+    """Chủ dự án bỏ các trang thống kê: chỉ giữ Giao dịch, Bản đồ trạm, Trạm & Tủ."""
+    settings, db_path = smoke_env
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    for page in (
+        "sessions",
+        "payments",
+        "batteries",
+        "alerts",
+        "incidents",
+        "metrics",
+        "ground-truth",
+    ):
+        assert client.get(f"/dashboard/{page}?profile=smoke").status_code == 404, page
+        assert client.get(f"/api/dashboard/{page}?profile=smoke").status_code == 404, page
+    for api in ("timeseries/ready-batteries", "alarms"):
+        assert client.get(f"/api/dashboard/{api}?profile=smoke").status_code == 404, api
+    nav = client.get("/dashboard?profile=smoke").text
+    assert 'href="/dashboard/map?' in nav and 'href="/dashboard/stations?' in nav
+    assert "Metric SF1" not in nav and "Kiểm chứng (mock)" not in nav
 
 
 def test_as_of_clamping_and_invalid_filters(smoke_env: tuple[Settings, Path]) -> None:
@@ -633,42 +317,6 @@ def test_ready_batteries_use_estimated_soc_and_exclude_empty_slots() -> None:
     assert much_later["C1"] == (2, 3)
 
 
-def test_stuck_sessions_stale_flag_and_ordering() -> None:
-    t0 = datetime(2026, 11, 4, 10, 0, 0, tzinfo=UTC)
-    stations = pl.DataFrame(
-        {"station_id": ["VN-ST-001"], "country": ["VN"], "timezone": ["Asia/Ho_Chi_Minh"]}
-    )
-
-    def session(sid: str, start: datetime) -> list[dict[str, object]]:
-        return [
-            {
-                "event_id": f"{sid}-{i}",
-                "session_id": sid,
-                "user_id": "U1",
-                "station_id": "VN-ST-001",
-                "cabinet_id": "VN-ST-001-CAB-01",
-                "slot_id": None,
-                "step": step.value,
-                "status": "OK",
-                "error_code": None,
-                "error_message": None,
-                "occurred_at": start + timedelta(seconds=i * 3),
-            }
-            for i, step in enumerate(list(Step)[:5])  # dừng sau bước 5 -> chờ bước 6 (SLA 120s)
-        ]
-
-    rows = [
-        *session("S-OLD", t0),  # treo ~ 3 giờ
-        *session("S-FRESH-A", t0 + timedelta(hours=2, minutes=50)),  # treo ~ 10 phút
-        *session("S-FRESH-B", t0 + timedelta(hours=2, minutes=55)),  # treo ~ 5 phút
-    ]
-    events = pl.DataFrame(rows, schema=_TEST_EVENT_SCHEMA)
-    as_of = t0 + timedelta(hours=3)
-    stuck = compute_stuck_sessions(events, stations, None, as_of, K)
-    assert [s.session_id for s in stuck] == ["S-FRESH-B", "S-FRESH-A", "S-OLD"]
-    assert [s.stale for s in stuck] == [False, False, True]
-
-
 def test_profile_must_be_a_known_name_not_a_path(smoke_env: tuple[Settings, Path]) -> None:
     settings, db_path = smoke_env
     client = TestClient(create_app(db_path=db_path, settings=settings))
@@ -679,92 +327,64 @@ def test_profile_must_be_a_known_name_not_a_path(smoke_env: tuple[Settings, Path
         assert str(settings.data_dir) not in r.text, bad  # không lộ đường dẫn tuyệt đối
 
 
+def test_empty_as_of_param_means_end_of_data(smoke_env: tuple[Settings, Path]) -> None:
+    """Nút "Cuối dữ liệu" có thể gửi `as_of=` rỗng: phải coi như không có, không trả 422."""
+    settings, db_path = smoke_env
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    assert client.get("/dashboard?profile=smoke&country=VN&as_of=").status_code == 200
+    assert client.get("/api/dashboard/overview?profile=smoke&as_of=").status_code == 200
+
+
 # --- 3. Ground-truth isolation test ----------------------------------------------------------
 
 
-def test_operational_tabs_never_read_ground_truth_csv(
+def test_dashboard_never_reads_ground_truth_csv(
     smoke_env: tuple[Settings, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings, db_path = smoke_env
-    app = create_app(db_path=db_path, settings=settings)
-    client = TestClient(app)
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    clear_cache()
 
-    def _forbidden_ground_truth(*args: object, **kwargs: object) -> object:
-        raise AssertionError("Operational tabs MUST NOT call load_ground_truth or pl.read_csv!")
+    def _forbidden(*args: object, **kwargs: object) -> object:
+        raise AssertionError("Dashboard MUST NOT read CSV (ground_truth.csv)!")
 
-    monkeypatch.setattr("ase.dashboard.data.load_ground_truth", _forbidden_ground_truth)
-    monkeypatch.setattr("ase.dashboard.api.load_ground_truth", _forbidden_ground_truth)
-    monkeypatch.setattr("ase.dashboard.pages.load_ground_truth", _forbidden_ground_truth)
-    monkeypatch.setattr("polars.read_csv", _forbidden_ground_truth)
-
-    r_st = client.get("/api/dashboard/stations?profile=smoke")
-    assert r_st.status_code == 200
-    first_station_id = r_st.json()["stations"][0]["station_id"]
-
-    r_sess = client.get("/api/dashboard/sessions?profile=smoke")
-    assert r_sess.status_code == 200
-    first_session_id = r_sess.json()["recent_sessions"][0]["session_id"]
-
-    operational_urls = [
+    monkeypatch.setattr("polars.read_csv", _forbidden)
+    for url in (
         "/api/dashboard/overview?profile=smoke",
         "/api/dashboard/stations?profile=smoke",
-        f"/api/dashboard/stations/{first_station_id}?profile=smoke",
-        "/api/dashboard/sessions?profile=smoke",
-        f"/api/dashboard/sessions/{first_session_id}?profile=smoke",
-        "/api/dashboard/payments?profile=smoke",
-        "/api/dashboard/batteries?profile=smoke",
-        "/api/dashboard/alerts?profile=smoke",
-        "/api/dashboard/incidents?profile=smoke",
-        "/api/dashboard/metrics?profile=smoke",
-        "/api/dashboard/timeseries/cabinet-temperature?profile=smoke",
-        "/api/dashboard/timeseries/ready-batteries?profile=smoke",
-        "/api/dashboard/alarms?profile=smoke",
+        "/api/dashboard/stations/VN-ST-001?profile=smoke",
+        "/api/dashboard/transactions?profile=smoke",
         "/dashboard?profile=smoke",
+        "/dashboard/transactions/export?profile=smoke",
+        "/dashboard/map?profile=smoke",
         "/dashboard/stations?profile=smoke",
-        f"/dashboard/stations/{first_station_id}?profile=smoke",
-        "/dashboard/sessions?profile=smoke",
-        f"/dashboard/sessions/{first_session_id}?profile=smoke",
-        "/dashboard/payments?profile=smoke",
-        "/dashboard/batteries?profile=smoke",
-        "/dashboard/alerts?profile=smoke",
-        "/dashboard/incidents?profile=smoke",
-        "/dashboard/metrics?profile=smoke",
-    ]
-    for url in operational_urls:
-        resp = client.get(url)
-        assert resp.status_code == 200, f"Operational endpoint failed: {url}"
+    ):
+        assert client.get(url).status_code == 200, url
 
 
-# --- 4. Untrusted data HTML escaping test ----------------------------------------------------
+# --- 4. Untrusted data: error_message không bao giờ hiện trên danh sách giao dịch -------------
 
 
-def test_untrusted_data_html_escaping_on_prompt_injection_session(
+def test_transactions_never_render_untrusted_error_message(
     smoke_env: tuple[Settings, Path],
 ) -> None:
     settings, db_path = smoke_env
-    # Find a session in smoke that has the prompt_injection payload (</untrusted_data>)
     events_path = settings.data_dir / "smoke" / "ase.swap.events.jsonl"
-    injected_session_id: str | None = None
+    injected: str | None = None
     for line in events_path.read_bytes().splitlines():
-        if not line:
-            continue
-        obj = orjson.loads(line)
-        msg = obj.get("error_message")
-        if isinstance(msg, str) and "</untrusted_data>" in msg:
-            injected_session_id = str(obj["session_id"])
+        obj = orjson.loads(line) if line else {}
+        if (
+            isinstance(obj.get("error_message"), str)
+            and "</untrusted_data>" in obj["error_message"]
+        ):
+            injected = str(obj["session_id"])
             break
-
-    assert injected_session_id is not None, "Expected prompt_injection session in smoke profile"
-
-    app = create_app(db_path=db_path, settings=settings)
-    client = TestClient(app)
-    resp = client.get(f"/dashboard/sessions/{injected_session_id}?profile=smoke")
-    assert resp.status_code == 200
-    body = resp.text
-    assert "</untrusted_data>" not in body
-    assert "&lt;/untrusted_data&gt;" in body
-    assert "dữ liệu chưa kiểm chứng" in body
+    assert injected is not None, "Expected prompt_injection session in smoke profile"
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    body = client.get(f"/dashboard?profile=smoke&emsp_txn_id={injected}").text
+    assert injected in body
+    assert "untrusted_data" not in body
 
 
 # --- 5. Station coordinate determinism test --------------------------------------------------
@@ -787,254 +407,7 @@ def test_station_coordinates_deterministic_and_within_country_cities() -> None:
         )
 
 
-# --- 6. New Timeseries & Alarms tests (DASHBOARD_UI_PLAN §4) ----------------------------------
-
-
-def test_new_timeseries_and_alarms_api_smoke(smoke_env: tuple[Settings, Path]) -> None:
-    settings, db_path = smoke_env
-    app = create_app(db_path=db_path, settings=settings)
-    client = TestClient(app)
-
-    # 1. Cabinet temperature timeseries
-    r_temp = client.get("/api/dashboard/timeseries/cabinet-temperature?profile=smoke&hours=1")
-    assert r_temp.status_code == 200
-    temp_resp = CabinetTemperatureTimeseriesResponse.model_validate(r_temp.json())
-    assert temp_resp.warn_threshold_c == K.error_catalog.thresholds.temp_warn_1_c
-    assert temp_resp.critical_threshold_c == K.error_catalog.thresholds.temp_warn_2_c
-    assert len(temp_resp.available_stations) == 2
-    assert len(temp_resp.series) >= 2
-
-    # 2. Ready batteries timeseries
-    r_ready = client.get(
-        "/api/dashboard/timeseries/ready-batteries?profile=smoke&hours=6&step_minutes=15"
-    )
-    assert r_ready.status_code == 200
-    ready_resp = ReadyBatteriesTimeseriesResponse.model_validate(r_ready.json())
-    assert len(ready_resp.series) == 2
-    assert len(ready_resp.timestamps) > 0
-
-    # 3. Alarms API
-    r_alarms = client.get("/api/dashboard/alarms?profile=smoke")
-    assert r_alarms.status_code == 200
-    alarms_resp = AlarmsResponse.model_validate(r_alarms.json())
-    assert alarms_resp.total >= 0
-
-
-def test_alarms_severity_mapping_and_feedback_status() -> None:
-    as_of = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
-
-    # Synthetic profile data with stations and cabinets
-    st_df = pl.DataFrame(
-        {
-            "station_id": ["ST-01"],
-            "country": ["VN"],
-            "timezone": ["Asia/Ho_Chi_Minh"],
-            "timezone_offset": ["+07:00"],
-            "model_gen": ["G1"],
-            "lat": [10.8],
-            "lon": [106.6],
-        }
-    )
-    cab_df = pl.DataFrame(
-        {
-            "cabinet_id": ["CAB-01"],
-            "station_id": ["ST-01"],
-            "model_gen": ["G1"],
-        }
-    )
-    # Cabinet online (heartbeat 30s ago)
-    tel_df = pl.DataFrame(
-        {
-            "cabinet_id": ["CAB-01"],
-            "slot_id": [None],
-            "door_state": ["CLOSED"],
-            "battery_detected": [True],
-            "soc": [95.0],
-            "temperature": [32.0],
-            "heartbeat_at": [as_of - timedelta(seconds=30)],
-            "hw_error_code": [None],
-        }
-    )
-    slots_df = pl.DataFrame({"cabinet_id": ["CAB-01"], "slot_id": ["01"]})
-    empty_df = pl.DataFrame()
-
-    data = ProfileData(
-        profile="synthetic",
-        profile_dir=Path("/tmp"),
-        manifest_mtime=0.0,
-        stations=st_df,
-        cabinets=cab_df,
-        slots=slots_df,
-        batteries=empty_df,
-        users=empty_df,
-        swap_sessions=empty_df,
-        payments=empty_df,
-        cabinet_telemetry=tel_df,
-        swap_events=empty_df,
-        min_time=as_of - timedelta(days=1),
-        max_time=as_of,
-        default_as_of=as_of,
-    )
-
-    # Cards with P1, P2, P3
-    card_p1 = {
-        "channel": "it-ops",
-        "incident_id": "INC-P1",
-        "revision": 1,
-        "card_json": orjson.dumps(
-            {"incident_id": "INC-P1", "severity": "P1", "station_id": "ST-01"}
-        ).decode("utf-8"),
-        "received_at": (as_of - timedelta(minutes=10)).isoformat(),
-    }
-    card_p2 = {
-        "channel": "it-ops",
-        "incident_id": "INC-P2",
-        "revision": 1,
-        "card_json": orjson.dumps(
-            {"incident_id": "INC-P2", "severity": "P2", "station_id": "ST-01"}
-        ).decode("utf-8"),
-        "received_at": (as_of - timedelta(minutes=8)).isoformat(),
-    }
-    card_p3 = {
-        "channel": "it-ops",
-        "incident_id": "INC-P3",
-        "revision": 1,
-        "card_json": orjson.dumps(
-            {"incident_id": "INC-P3", "severity": "P3", "station_id": "ST-01"}
-        ).decode("utf-8"),
-        "received_at": (as_of - timedelta(minutes=5)).isoformat(),
-    }
-
-    # Latest feedback: INC-P1 has confirm, INC-P2 has resolved, INC-P3 has no feedback
-    snapshot = NotifierSnapshot(
-        outbox=[],
-        cards=[card_p1, card_p2, card_p3],
-        latest_feedback={
-            "INC-P1": ("confirm", (as_of - timedelta(minutes=6)).isoformat()),
-            "INC-P2": ("resolved", (as_of - timedelta(minutes=4)).isoformat()),
-        },
-    )
-
-    alarms_resp = build_alarms_page(
-        data,
-        as_of=as_of,
-        settings=Settings(data_dir=Path("/tmp")),
-        knowledge=K,
-        notifier=snapshot,
-    )
-
-    alarms_by_id = {a.alarm_id: a for a in alarms_resp.alarms}
-    assert alarms_by_id["INC-P1"].severity == "Critical"
-    assert alarms_by_id["INC-P1"].status_line2 == "Đã xác nhận"
-
-    assert alarms_by_id["INC-P2"].severity == "Major"
-    assert alarms_by_id["INC-P2"].status_line2 == "Đã xử lý"
-
-    assert alarms_by_id["INC-P3"].severity == "Minor"
-    assert alarms_by_id["INC-P3"].status_line2 == "Chưa xác nhận"
-
-
-def test_alarms_device_alarm_on_lost_heartbeat() -> None:
-    as_of = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
-
-    st_df = pl.DataFrame(
-        {
-            "station_id": ["ST-01"],
-            "country": ["VN"],
-            "timezone": ["Asia/Ho_Chi_Minh"],
-            "timezone_offset": ["+07:00"],
-            "model_gen": ["G1"],
-            "lat": [10.8],
-            "lon": [106.6],
-        }
-    )
-    cab_df = pl.DataFrame(
-        {
-            "cabinet_id": ["CAB-LOST-HB"],
-            "station_id": ["ST-01"],
-            "model_gen": ["G1"],
-        }
-    )
-    # Heartbeat 5 minutes ago (> 2 min threshold)
-    tel_df = pl.DataFrame(
-        {
-            "cabinet_id": ["CAB-LOST-HB"],
-            "slot_id": [None],
-            "door_state": ["CLOSED"],
-            "battery_detected": [True],
-            "soc": [90.0],
-            "temperature": [30.0],
-            "heartbeat_at": [as_of - timedelta(minutes=5)],
-            "hw_error_code": [None],
-        }
-    )
-    slots_df = pl.DataFrame({"cabinet_id": ["CAB-LOST-HB"], "slot_id": ["01"]})
-    empty_df = pl.DataFrame()
-
-    data = ProfileData(
-        profile="synthetic",
-        profile_dir=Path("/tmp"),
-        manifest_mtime=0.0,
-        stations=st_df,
-        cabinets=cab_df,
-        slots=slots_df,
-        batteries=empty_df,
-        users=empty_df,
-        swap_sessions=empty_df,
-        payments=empty_df,
-        cabinet_telemetry=tel_df,
-        swap_events=empty_df,
-        min_time=as_of - timedelta(days=1),
-        max_time=as_of,
-        default_as_of=as_of,
-    )
-
-    snapshot = NotifierSnapshot(outbox=[], cards=[], latest_feedback={})
-    alarms_resp = build_alarms_page(
-        data,
-        as_of=as_of,
-        settings=Settings(data_dir=Path("/tmp")),
-        knowledge=K,
-        notifier=snapshot,
-    )
-
-    dev_alarms = [a for a in alarms_resp.alarms if a.originator == "CAB-LOST-HB"]
-    assert len(dev_alarms) == 1
-    assert dev_alarms[0].severity == "Critical"
-    assert "Mất kết nối heartbeat" in dev_alarms[0].alarm_type
-    assert dev_alarms[0].status_line2 == "Chưa xác nhận"
-
-
-def test_html_widget_containers_and_no_inner_html_in_dashboard_js(
-    smoke_env: tuple[Settings, Path],
-) -> None:
-    settings, db_path = smoke_env
-    app = create_app(db_path=db_path, settings=settings)
-    client = TestClient(app)
-
-    # 1. HTML overview has expected widget card containers
-    resp = client.get("/dashboard?profile=smoke")
-    assert resp.status_code == 200
-    html = resp.text
-    expected_widget_ids = [
-        "widget-station-map",
-        "widget-station-table",
-        "widget-cabinet-temp",
-        "widget-ready-batteries",
-        "widget-alarms-table",
-    ]
-    for w_id in expected_widget_ids:
-        assert f'id="{w_id}"' in html, f"Missing widget card {w_id} in overview HTML"
-
-    # 2. dashboard.js does not use innerHTML for data rendering
-    js_path = Path(__file__).resolve().parents[2] / "ase" / "dashboard" / "static" / "dashboard.js"
-    js_content = js_path.read_text(encoding="utf-8")
-    assert not re.search(r"\.innerHTML\s*=", js_content), (
-        "dashboard.js must not assign to innerHTML (security rule §2.6)"
-    )
-
-
-# --- 7. Hồi quy: page-data an toàn, bản đồ Vietmap (khôi phục) ----------------------------
+# --- 7. Hồi quy: page-data an toàn, bản đồ Vietmap ----------------------------------------
 
 
 def test_page_data_json_is_parseable_and_cannot_break_out_of_script(
@@ -1042,28 +415,24 @@ def test_page_data_json_is_parseable_and_cannot_break_out_of_script(
 ) -> None:
     """Hồi quy: page-data bị escape thành `&#34;` làm JSON.parse lỗi -> widget JS trống."""
     import json
-    import re
 
     settings, db_path = smoke_env
     client = TestClient(create_app(db_path=db_path, settings=settings))
-    pages = ["", "/stations", "/stations/VN-ST-001", "/sessions", "/payments", "/batteries"]
-    pages += ["/alerts", "/incidents", "/metrics", "/ground-truth"]
-    for page in pages:
+    for page in ("", "/map", "/stations", "/stations/VN-ST-001"):
         html = client.get(f"/dashboard{page}?profile=smoke").text
         m = re.search(r'<script type="application/json" id="page-data">(.*?)</script>', html, re.S)
         assert m is not None, page
         raw = m.group(1)
-        assert "&#34;" not in raw and "&quot;" not in raw, page  # không bị escape kiểu HTML
-        assert "<" not in raw, page  # mọi '<' đã thành \\u003c, không thể đóng thẻ script
+        assert "&#34;" not in raw and "&quot;" not in raw, page
+        assert "<" not in raw, page
         assert isinstance(json.loads(raw), dict), page
+    m = re.search(
+        r'id="page-data">(.*?)</script>', client.get("/dashboard/map?profile=smoke").text, re.S
+    )
+    assert m is not None and "stations_map" in json.loads(m.group(1))
 
-    # Trang tổng quan phải mang đủ dữ liệu cho các widget JS
-    html = client.get("/dashboard?profile=smoke").text
-    m = re.search(r'id="page-data">(.*?)</script>', html, re.S)
-    assert m is not None
-    data = json.loads(m.group(1))
-    for key in ("stations_map", "temperature_timeseries", "ready_batteries_timeseries", "alarms"):
-        assert key in data, key
+    js = (Path(__file__).resolve().parents[2] / "ase/dashboard/static/dashboard.js").read_text()
+    assert not re.search(r"\.innerHTML\s*=", js), "dashboard.js must not assign innerHTML (§2.6)"
 
 
 def test_map_uses_vietmap_not_osm_and_key_only_from_settings(
@@ -1076,7 +445,7 @@ def test_map_uses_vietmap_not_osm_and_key_only_from_settings(
     settings = settings.model_copy(update={"vietmap_api_key": None})
     html = (
         TestClient(create_app(db_path=db_path, settings=settings))
-        .get("/dashboard?profile=smoke")
+        .get("/dashboard/map?profile=smoke")
         .text
     )
     assert "openstreetmap" not in html.lower()
@@ -1088,12 +457,14 @@ def test_map_uses_vietmap_not_osm_and_key_only_from_settings(
 
     keyed = settings.model_copy(update={"vietmap_api_key": SecretStr('k"<x>')})
     html2 = (
-        TestClient(create_app(db_path=db_path, settings=keyed)).get("/dashboard?profile=smoke").text
+        TestClient(create_app(db_path=db_path, settings=keyed))
+        .get("/dashboard/map?profile=smoke")
+        .text
     )
     assert 'data-vietmap-key="k&#34;&lt;x&gt;"' in html2  # key được escape trong thuộc tính
 
 
-def test_vinfast_bss_api_returns_43298_cabinets(smoke_env: tuple[Settings, Path]) -> None:
+def test_vinfast_bss_api_returns_43297_cabinets(smoke_env: tuple[Settings, Path]) -> None:
     gz_path = Path(__file__).resolve().parents[2] / "ase/dashboard/static/vinfast_bss.json.gz"
     if not gz_path.exists():
         pytest.skip(
@@ -1105,100 +476,187 @@ def test_vinfast_bss_api_returns_43298_cabinets(smoke_env: tuple[Settings, Path]
     assert resp.status_code == 200
     rows = resp.json()
     assert isinstance(rows, list)
-    assert len(rows) == 43297  # 43.298 trừ tủ sai toạ độ B.TNG10178
-    first = rows[0]
-    assert len(first) == 5
-    lat, lon, code, name, address = first
-    assert isinstance(lat, float) and 8.0 <= lat <= 24.0
-    assert isinstance(lon, float) and 102.0 <= lon <= 110.0
-    assert isinstance(code, str) and code.startswith("B.")
-    assert isinstance(name, str) and len(name) > 0
-    assert isinstance(address, str)
+    # 3 nguồn: dòng 5 cột = tủ đổi pin VN thật (file gốc 43.298, đã loại tủ sai toạ độ
+    # B.TNG10178); dòng 6 cột có mã nước = ID (trạm sạc, tham khảo) / PH (mô phỏng).
+    vn = [r for r in rows if len(r) == 5]
+    others = [r for r in rows if len(r) != 5]
+    assert len(vn) == 43297
+    assert all(len(r) == 6 and r[5] in {"ID", "PH"} for r in others)
+    for lat, lon, code, name, address in vn[:1]:
+        assert isinstance(lat, float) and 8.0 <= lat <= 24.0
+        assert isinstance(lon, float) and 102.0 <= lon <= 110.0
+        assert isinstance(code, str) and code.startswith("B.")
+        assert isinstance(name, str) and len(name) > 0
+        assert isinstance(address, str)
 
 
-def test_alarms_use_latest_incident_revision_skip_merged_and_card_local_time(
-    tmp_path: Path,
+# --- 8. Danh sách giao dịch đổi pin ----------------------------------------------------------
+
+
+def _smoke_data(settings: Settings) -> ProfileData:
+    return load_profile_data("smoke", settings=settings)
+
+
+def test_transactions_default_lists_all_started_newest_first(
+    smoke_env: tuple[Settings, Path],
 ) -> None:
-    """Hồi quy: bảng Cảnh báo lấy revision mới nhất, bỏ incident đã gộp (`merged_into`), và
-    alarm từ card hiển thị giờ địa phương theo `first_seen_at` + timezone của card."""
-    as_of = datetime(2026, 11, 4, 12, 0, 0, tzinfo=UTC)
-    st_df = pl.DataFrame(
+    settings, _ = smoke_env
+    data = _smoke_data(settings)
+    df = query_transactions(data, data.default_as_of, TxnFilters())
+    started = data.swap_sessions.filter(pl.col("started_at") <= data.default_as_of)
+    assert df.height == started.height  # mặc định: tất cả giao dịch, không lọc
+    assert df["started_at"].is_sorted(descending=True)
+    assert set(df["status"].unique()) <= {s.value for s in TxnStatus}
+    # Lý do lỗi chỉ có ở giao dịch thất bại
+    assert (
+        df.filter((pl.col("status") != "FAILED") & pl.col("error_code").is_not_null()).height == 0
+    )
+    assert (
+        df.filter(pl.col("status") == "FAILED")["error_code"].null_count()
+        < df.filter(pl.col("status") == "FAILED").height
+    )
+
+
+def test_transaction_status_follows_as_of(smoke_env: tuple[Settings, Path]) -> None:
+    """Phiên dở dang tại as_of: chưa có pin vào = Tạo mới; pin cũ đã vào = Đưa pin vào."""
+    settings, _ = smoke_env
+    data = _smoke_data(settings)
+    full = query_transactions(
+        data, data.max_time, TxnFilters(statuses=frozenset({TxnStatus.COMPLETED}))
+    )
+    row = full.filter(pl.col("battery_in_at").is_not_null()).row(0, named=True)
+    sid = TxnFilters(emsp_txn_id=row["session_id"])
+
+    def at(t: datetime) -> dict[str, object]:
+        return query_transactions(data, t, sid).row(0, named=True)
+
+    created = at(row["battery_in_at"] - timedelta(milliseconds=1))
+    assert created["status"] == "CREATED"
+    assert created["battery_in_local"] is None and created["battery_out_id"] is None
+    mid = at(row["battery_in_at"])
+    assert mid["status"] == "BATTERY_IN"
+    assert mid["battery_in_local"] is not None and mid["battery_out_id"] is None
+    assert at(row["ended_at"])["status"] == "COMPLETED"
+    assert query_transactions(data, row["started_at"] - timedelta(seconds=1), sid).height == 0
+
+
+def test_transaction_date_filter_uses_station_local_time(
+    smoke_env: tuple[Settings, Path],
+) -> None:
+    settings, _ = smoke_env
+    data = _smoke_data(settings)
+    row = query_transactions(data, data.default_as_of, TxnFilters()).row(0, named=True)
+    local = datetime.strptime(row["started_local"], "%d/%m/%Y %H:%M:%S")  # noqa: DTZ007
+    minute = local.replace(second=0)
+    hit = TxnFilters(
+        emsp_txn_id=row["session_id"], date_from=minute, date_to=minute + timedelta(seconds=59)
+    )
+    assert query_transactions(data, data.default_as_of, hit).height == 1
+    # Cùng khung giờ nhưng hiểu theo UTC (lệch 7 giờ ở VN) thì không khớp
+    utc_minute = minute - timedelta(hours=7)
+    miss = TxnFilters(
+        emsp_txn_id=row["session_id"],
+        date_from=utc_minute,
+        date_to=utc_minute + timedelta(seconds=59),
+    )
+    assert query_transactions(data, data.default_as_of, miss).height == 0
+
+
+def test_transactions_local_time_per_station_timezone() -> None:
+    from ase.dashboard.transactions import _to_local_naive
+
+    t = datetime(2026, 11, 9, 10, 29, 50, tzinfo=UTC)
+    df = pl.DataFrame(
         {
-            "station_id": ["ST-01"],
-            "country": ["VN"],
-            "timezone": ["Asia/Ho_Chi_Minh"],
-            "model_gen": ["G1"],
-            "lat": [10.8],
-            "lon": [106.6],
+            "timezone": ["Asia/Ho_Chi_Minh", "Asia/Manila", "Asia/Makassar", "Asia/Jakarta"],
+            "ts": [t] * 4,
         }
     )
-    cab_df = pl.DataFrame({"cabinet_id": ["CAB-01"], "station_id": ["ST-01"], "model_gen": ["G1"]})
-    empty_df = pl.DataFrame()
-    data = ProfileData(
-        profile="synthetic",
-        profile_dir=tmp_path,
-        manifest_mtime=0.0,
-        stations=st_df,
-        cabinets=cab_df,
-        slots=pl.DataFrame({"cabinet_id": ["CAB-01"], "slot_id": ["01"]}),
-        batteries=empty_df,
-        users=empty_df,
-        swap_sessions=empty_df,
-        payments=empty_df,
-        cabinet_telemetry=pl.DataFrame(
-            {
-                "cabinet_id": ["CAB-01"],
-                "slot_id": [None],
-                "door_state": ["CLOSED"],
-                "battery_detected": [True],
-                "soc": [95.0],
-                "temperature": [32.0],
-                "heartbeat_at": [as_of - timedelta(seconds=30)],
-                "hw_error_code": [None],
-            }
-        ),
-        swap_events=empty_df,
-        min_time=as_of - timedelta(days=1),
-        max_time=as_of,
-        default_as_of=as_of,
+    out = _to_local_naive(df, "ts", "local")["local"].dt.strftime("%H:%M:%S").to_list()
+    assert out == ["17:29:50", "18:29:50", "18:29:50", "17:29:50"]
+
+
+def test_transactions_api_filters_and_validation(smoke_env: tuple[Settings, Path]) -> None:
+    settings, db_path = smoke_env
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+
+    def get(qs: str) -> TransactionsPageResponse:
+        r = client.get(f"/api/dashboard/transactions?profile=smoke&{qs}")
+        assert r.status_code == 200, r.text
+        return TransactionsPageResponse.model_validate(r.json())
+
+    all_rows = get("page_size=100")
+    failed = get("status=FAILED&page_size=100")
+    both = get("status=FAILED&status=COMPLETED")
+    assert 0 < failed.total < all_rows.total
+    assert all(r.status_label == "Thất bại" for r in failed.rows)
+    in_progress = get("status=CREATED&status=BATTERY_IN")
+    assert both.total + in_progress.total == all_rows.total
+    assert failed.filters.statuses == ["FAILED"] and failed.filters.active_count == 1
+
+    st = get("station_id=vn-st-002")  # khớp chứa, không phân biệt hoa thường
+    assert st.total > 0 and all(r.station_id == "VN-ST-002" for r in st.rows)
+    assert get("q=VN-ST-002").total == st.total
+
+    sample = next(r for r in all_rows.rows if r.battery_out_id and r.cabinet_txn_id)
+    assert sample.battery_out_id is not None and sample.cabinet_txn_id is not None
+    by_bat = get(f"battery_serial={sample.battery_out_id}")
+    assert any(r.emsp_txn_id == sample.emsp_txn_id for r in by_bat.rows)
+    assert all(
+        sample.battery_out_id in ((r.battery_in_id or "") + (r.battery_out_id or ""))
+        for r in by_bat.rows
     )
-    first_seen = (as_of - timedelta(minutes=30)).isoformat()
-    base = {"station_id": "ST-01", "country": "VN", "first_seen_at": first_seen}
-    rows = [
-        {**base, "incident_id": "INC-A", "revision": 1, "severity": "P2"},
-        {**base, "incident_id": "INC-A", "revision": 2, "severity": "P1"},
-        {**base, "incident_id": "INC-M", "revision": 1, "severity": "P2", "merged_into": "INC-A"},
-    ]
-    (tmp_path / "incidents.jsonl").write_text(
-        "".join(orjson.dumps(r).decode("utf-8") + "\n" for r in rows), encoding="utf-8"
-    )
-    card_json = {
-        "incident_id": "INC-C",
-        "severity": "P2",
-        "station_id": "ST-01",
-        "timezone": "Asia/Manila",
-        "first_seen_at": first_seen,
-        "session_ids": ["SW-1"],
-    }
-    snapshot = NotifierSnapshot(
-        outbox=[],
-        cards=[
-            {
-                "channel": "it-ops",
-                "incident_id": "INC-C",
-                "revision": 1,
-                "card_json": orjson.dumps(card_json).decode("utf-8"),
-                "received_at": as_of.isoformat(),
-            }
-        ],
-        latest_feedback={},
-    )
-    resp = build_alarms_page(
-        data, as_of=as_of, settings=Settings(data_dir=tmp_path), knowledge=K, notifier=snapshot
-    )
-    by_id = {a.alarm_id: a for a in resp.alarms}
-    assert by_id["INC-A"].severity == "Critical"  # revision 2 (P1), không phải revision 1
-    assert "INC-M" not in by_id
-    card_alarm = by_id["INC-C"]
-    assert card_alarm.start_time_local == "19:30:00 04/11/2026 (GMT+8)"
-    assert card_alarm.details_link == "/dashboard/sessions/SW-1"
+    assert sample.cabinet_serial == cabinet_serial(sample.cabinet_id or "")
+    assert get(f"cabinet_serial={sample.cabinet_serial}").total > 0
+
+    # Phân trang: STT nối tiếp, trang vượt quá bị kẹp về trang cuối
+    p2 = get("page=2")
+    assert p2.page == 2 and p2.rows[0].stt == 21
+    last = get("page=100000")
+    assert last.page == last.total_pages
+
+    for bad in ("status=BOGUS", "date_from=2026-13-01T00:00", "page_size=7", "page=0"):
+        assert client.get(f"/api/dashboard/transactions?profile=smoke&{bad}").status_code == 422, (
+            bad
+        )
+    assert client.get("/dashboard?profile=smoke&status=BOGUS").status_code == 422
+
+
+def test_transactions_html_matches_real_screen_and_export_csv(
+    smoke_env: tuple[Settings, Path],
+) -> None:
+    settings, db_path = smoke_env
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    html = client.get("/dashboard?profile=smoke&status=FAILED").text
+    assert "Danh sách giao dịch đổi pin" in html
+    for _, title in COLUMNS:
+        assert f"<th>{title}</th>" in html, title
+    for label in (
+        "Trạm - Tủ",
+        "Ngày thực hiện từ",
+        "Ngày thực hiện đến",
+        "Tạo mới",
+        "Đưa pin vào",
+        "Hoàn thành",
+        "Thất bại",
+        "Đặt lại",
+        "Xác nhận",
+        "Xuất dữ liệu",
+        "Serial Pin",
+    ):
+        assert label in html, label
+    assert 'name="status" value="FAILED" checked' in html
+    assert "/dashboard/transactions/export?" in html and "status=FAILED" in html
+
+    r = client.get("/dashboard/transactions/export?profile=smoke&status=FAILED")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers["content-disposition"]
+    text = r.content.decode("utf-8")
+    assert text.startswith("﻿STT,Mã trạm,Mã tủ,S/N tủ pin")
+    lines = text.strip().splitlines()
+    total = TransactionsPageResponse.model_validate(
+        client.get("/api/dashboard/transactions?profile=smoke&status=FAILED").json()
+    ).total
+    assert len(lines) == total + 1  # xuất toàn bộ theo bộ lọc, không phân trang
+    assert all(",Thất bại," in ln for ln in lines[1:])

@@ -32,7 +32,11 @@ class TeamsMockNotifier:
 
     async def send(self, alert: Alert) -> SendResult:
         inc = alert.incident
-        card = build_adaptive_card(alert, feedback_base_url=self.settings.feedback_base_url)
+        card = build_adaptive_card(
+            alert,
+            feedback_base_url=self.settings.feedback_base_url,
+            dashboard_profile=self.settings.dashboard_link_profile,
+        )
         url = f"{self.settings.teams_url.rstrip('/')}/webhook/{alert.channel}"
 
         async with httpx.AsyncClient(transport=self._transport, timeout=10.0) as client:
@@ -54,7 +58,8 @@ class TeamsMockNotifier:
         """POST card tin gom (chỉ số + top 10 + link dashboard) tới kênh của team."""
         card = build_batch_card(
             batch,
-            dashboard_url=f"{self.settings.feedback_base_url.rstrip('/')}/dashboard/alerts",
+            base_url=self.settings.feedback_base_url,
+            dashboard_profile=self.settings.dashboard_link_profile,
         )
         await self._post(batch.channel, card)
         log.info("teams_batch_card_sent", batch_id=batch.batch_id, channel=batch.channel)

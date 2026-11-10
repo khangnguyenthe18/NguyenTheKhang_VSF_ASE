@@ -7,6 +7,8 @@ from ase.common.time import format_local
 from ase.knowledge.loader import Knowledge
 from ase.notifier.render import (
     CATEGORY_LABELS,
+    STEP_LABELS,
+    dashboard_session_url,
     feedback_urls,
     format_country,
     format_station_scope,
@@ -19,6 +21,7 @@ def build_adaptive_card(
     alert: Alert,
     feedback_base_url: str = "http://localhost:8000",
     knowledge: Knowledge | None = None,
+    dashboard_profile: str | None = None,
 ) -> dict[str, object]:
     """Sinh JSON Adaptive Card 1.5 rút gọn cho một Alert."""
     inc = alert.incident
@@ -58,14 +61,17 @@ def build_adaptive_card(
         )
 
     step_desc = step_description_for(inc.step, inc.error_code, knowledge)
+    session_url_fact = dashboard_session_url(
+        feedback_base_url, inc.session_ids[0], dashboard_profile
+    )
     facts: list[dict[str, str]] = [
-        {"title": "Mã GD", "value": inc.session_ids[0]},
+        {"title": "Mã GD", "value": f"[{inc.session_ids[0]}]({session_url_fact})"},
         {"title": "Giờ địa phương", "value": format_local(inc.first_seen_at, inc.timezone)},
         {"title": "Quốc gia", "value": format_country(inc)},
         {"title": "Trạm / Tủ / Khoang", "value": format_station_scope(inc)},
         {
             "title": "Bước lỗi",
-            "value": f"{inc.step.value} – {step_desc}",
+            "value": f"{STEP_LABELS[inc.step]} ({inc.step.value} – {step_desc})",
         },
         {"title": "Mã lỗi", "value": inc.error_code or "—"},
         {
@@ -111,7 +117,14 @@ def build_adaptive_card(
             }
         )
 
+    session_url = dashboard_session_url(feedback_base_url, inc.session_ids[0], dashboard_profile)
     actions: list[dict[str, str]] = [
+        {
+            "type": "Action.OpenUrl",
+            "title": "Xem giao dịch",
+            "url": session_url,
+            "style": "positive",
+        },
         {
             "type": "Action.OpenUrl",
             "title": "Xác nhận đúng",

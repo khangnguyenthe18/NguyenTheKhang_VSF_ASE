@@ -5,12 +5,14 @@ from __future__ import annotations
 import html
 import json
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal
+from urllib.parse import parse_qsl, urlencode
 
 import aiosqlite
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ase.common.config import Settings, get_settings
@@ -97,6 +99,20 @@ def create_app(
         StaticFiles(directory=str(static_dir)),
         name="dashboard-static",
     )
+
+    @app.middleware("http")
+    async def _drop_empty_dashboard_params(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Form lọc gửi `as_of=` (rỗng) khi bấm "Cuối dữ liệu"; coi tham số rỗng như không có."""
+        qs = request.scope.get("query_string", b"")
+        if request.url.path.startswith(("/dashboard", "/api/dashboard")) and qs:
+            pairs = parse_qsl(qs.decode("latin-1"), keep_blank_values=True)
+            kept = [(k, v) for k, v in pairs if v != ""]
+            if len(kept) != len(pairs):
+                request.scope["query_string"] = urlencode(kept).encode("latin-1")
+        return await call_next(request)
+
     app.include_router(dashboard_api_router)
     app.include_router(dashboard_pages_router)
 
@@ -124,6 +140,8 @@ def create_app(
         await _ensure_db(target_db)
 
         async with aiosqlite.connect(target_db) as db:
+            # Revision mới thay card cũ và hiện lên đầu kênh (xoá rồi chèn lại → id mới).
+            await db.execute("DELETE FROM cards WHERE incident_id = ?", (incident_id,))
             await db.execute(
                 """
                 INSERT INTO cards (channel, incident_id, revision, card_json, received_at)
@@ -208,13 +226,17 @@ def create_app(
             f"    <p><strong>{esc_label}</strong> (<code>{esc_action}</code>)"
             f" lúc <code>{html.escape(now_iso)}</code>.</p>\n"
             '    <p style="margin-bottom: 0;"><a href="/" style="color: #2563eb;'
-            ' text-decoration: none; font-weight: 600;">← Quay lại Mock Teams</a></p>\n'
+            ' text-decoration: none; font-weight: 600;">← Về trang chủ</a></p>\n'
             "  </div>\n</body>\n</html>"
         )
         return HTMLResponse(page)
 
-    @app.get("/", response_class=HTMLResponse)
-    async def index(channel: str | None = None) -> HTMLResponse:
+    @app.get("/", response_class=HTMLResponse, response_model=None)
+    async def index(channel: str | None = None) -> Response:
+        cfg: Settings = app.state.settings or get_settings()
+        if not cfg.mock_teams_ui:
+            # Tạm tắt giao diện mock Teams: "/" mở dashboard. Bật lại: ASE_MOCK_TEAMS_UI=true
+            return RedirectResponse("/dashboard", status_code=307)
         target_db = _resolve_db_path()
         await _ensure_db(target_db)
 
@@ -317,11 +339,15 @@ def create_app(
         )
 
         ac_cdn = "https://cdn.jsdelivr.net/npm/adaptivecards@3.0.4/dist/adaptivecards.min.js"
+        # Teams thật render Markdown (in đậm, link) trong TextBlock/FactSet; mock dùng markdown-it
+        # (html=false: HTML trong text không được render, link `javascript:` bị chặn).
+        md_cdn = "https://cdn.jsdelivr.net/npm/markdown-it@13.0.2/dist/markdown-it.min.js"
         page = f"""<!DOCTYPE html>
 <html lang="vi">
 <head>
   <meta charset="utf-8">
   <title>ASE Mock Microsoft Teams</title>
+  <script src="{md_cdn}"></script>
   <script src="{ac_cdn}"></script>
   <style>
     body {{
@@ -385,6 +411,13 @@ def create_app(
     {cards_html}
   </main>
   <script>
+    if (typeof AdaptiveCards !== 'undefined' && typeof markdownit !== 'undefined') {{
+      var md = markdownit({{ html: false, linkify: false, breaks: true }});
+      AdaptiveCards.AdaptiveCard.onProcessMarkdown = function(text, result) {{
+        result.outputHtml = md.render(text);
+        result.didProcess = true;
+      }};
+    }}
     var scripts = document.querySelectorAll('script[type="application/json"][id^="ac-data-"]');
     scripts.forEach(function(el) {{
       var idx = el.id.replace('ac-data-', '');

@@ -8,49 +8,35 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from ase.common.config import Settings, get_settings
-from ase.common.models import Step
 from ase.dashboard.data import (
     NotifierSnapshot,
     ProfileData,
     available_profiles,
-    load_ground_truth,
     load_profile_data,
     read_notifier_sqlite,
 )
 from ase.dashboard.metrics import (
-    build_alarms_page,
-    build_alerts_page,
-    build_batteries_page,
     build_cabinet_temperature_timeseries,
-    build_ground_truth_page,
-    build_incidents_placeholder,
-    build_metrics_placeholder,
     build_overview,
-    build_payments_page,
-    build_ready_batteries_timeseries,
-    build_session_detail,
-    build_sessions_page,
     build_station_detail,
     build_stations_list,
 )
 from ase.dashboard.models import (
-    AlarmsResponse,
-    AlertsPageResponse,
-    BatteriesPageResponse,
     CabinetTemperatureTimeseriesResponse,
-    GroundTruthPageResponse,
-    IncidentsPlaceholderResponse,
-    MetricsPlaceholderResponse,
     OverviewResponse,
-    PaymentsPageResponse,
-    ReadyBatteriesTimeseriesResponse,
-    SessionDetailResponse,
-    SessionsPageResponse,
     StationDetailResponse,
     StationsListResponse,
+    TransactionsPageResponse,
+)
+from ase.dashboard.transactions import (
+    INPUT_FMT,
+    PAGE_SIZES,
+    TxnFilters,
+    TxnStatus,
+    build_transactions_page,
 )
 from ase.knowledge.loader import default_knowledge
 
@@ -79,12 +65,15 @@ def normalize_country(country: str | None) -> str | None:
     return cleaned
 
 
-def resolve_profile_data(request: Request, profile: str) -> tuple[ProfileData, list[str]]:
+def resolve_profile_data(request: Request, profile: str | None) -> tuple[ProfileData, list[str]]:
+    """`profile=None` (URL không chỉ định) → `settings.dashboard_profile`, rồi `dev`, rồi profile
+    đầu tiên có dữ liệu. Profile chỉ định rõ mà không có thì báo 422."""
     settings = resolve_settings(request)
     profs = available_profiles(settings)
     target = profile
-    if target == "dev" and "dev" not in profs and profs:
-        target = profs[0]
+    if target is None:
+        preferred = [settings.dashboard_profile, "dev"]
+        target = next((p for p in preferred if p in profs), profs[0] if profs else "dev")
     if target not in profs:
         # Chỉ nhận tên profile có thật; không bao giờ dùng giá trị người dùng để dựng đường dẫn
         raise HTTPException(
@@ -102,10 +91,86 @@ def resolve_notifier(request: Request) -> NotifierSnapshot:
     return read_notifier_sqlite(resolve_db_path(request))
 
 
+def _parse_local_dt(raw: str | None, name: str) -> datetime | None:
+    if raw is None or not raw.strip():
+        return None
+    try:
+        # naive có chủ đích: giờ địa phương của từng trạm, so với cột giờ địa phương
+        return datetime.strptime(raw.strip()[:16], INPUT_FMT)  # noqa: DTZ007
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{name} không hợp lệ: {raw!r}") from exc
+
+
+def txn_filters(
+    q: str = "",
+    station_id: str = "",
+    cabinet_id: str = "",
+    cabinet_serial: str = "",
+    emsp_txn_id: str = "",
+    cabinet_txn_id: str = "",
+    battery_serial: str = "",
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: Annotated[list[str] | None, Query()] = None,
+) -> TxnFilters:
+    """Dependency dùng chung cho trang, API và xuất dữ liệu: cùng một bộ lọc như màn hình thật.
+
+    `date_from`/`date_to` là giờ địa phương của trạm (`YYYY-MM-DDTHH:MM`), `status` lặp lại được.
+    """
+    statuses: set[TxnStatus] = set()
+    for raw in status or []:
+        if not raw.strip():
+            continue
+        try:
+            statuses.add(TxnStatus(raw.strip().upper()))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"Trạng thái không hợp lệ: {raw}") from exc
+    return TxnFilters(
+        q=q.strip(),
+        station_id=station_id.strip(),
+        cabinet_id=cabinet_id.strip(),
+        cabinet_serial=cabinet_serial.strip(),
+        emsp_txn_id=emsp_txn_id.strip(),
+        cabinet_txn_id=cabinet_txn_id.strip(),
+        battery_serial=battery_serial.strip(),
+        date_from=_parse_local_dt(date_from, "Ngày thực hiện từ"),
+        date_to=_parse_local_dt(date_to, "Ngày thực hiện đến"),
+        statuses=frozenset(statuses),
+    )
+
+
+def check_page_size(page_size: int) -> int:
+    if page_size not in PAGE_SIZES:
+        raise HTTPException(status_code=422, detail=f"page_size phải thuộc {list(PAGE_SIZES)}")
+    return page_size
+
+
+@router.get("/transactions", response_model=TransactionsPageResponse)
+async def api_transactions(
+    request: Request,
+    filters: Annotated[TxnFilters, Depends(txn_filters)],
+    profile: str | None = None,
+    as_of: datetime | None = None,
+    country: str | None = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: int = PAGE_SIZES[0],
+) -> TransactionsPageResponse:
+    data, profs = resolve_profile_data(request, profile)
+    return build_transactions_page(
+        data,
+        filters=filters,
+        as_of=as_of,
+        country=normalize_country(country),
+        page=page,
+        page_size=check_page_size(page_size),
+        profiles=profs,
+    )
+
+
 @router.get("/overview", response_model=OverviewResponse)
 async def api_overview(
     request: Request,
-    profile: str = "dev",
+    profile: str | None = None,
     as_of: datetime | None = None,
     country: str | None = None,
 ) -> OverviewResponse:
@@ -127,7 +192,7 @@ async def api_overview(
 )
 async def api_cabinet_temperature_timeseries(
     request: Request,
-    profile: str = "dev",
+    profile: str | None = None,
     station_id: str | None = None,
     hours: int = 1,
     as_of: datetime | None = None,
@@ -146,54 +211,10 @@ async def api_cabinet_temperature_timeseries(
     )
 
 
-@router.get(
-    "/timeseries/ready-batteries",
-    response_model=ReadyBatteriesTimeseriesResponse,
-)
-async def api_ready_batteries_timeseries(
-    request: Request,
-    profile: str = "dev",
-    hours: int = 6,
-    step_minutes: int = 15,
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> ReadyBatteriesTimeseriesResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    return build_ready_batteries_timeseries(
-        data,
-        hours=hours,
-        step_minutes=step_minutes,
-        as_of=as_of,
-        country=c_norm,
-        settings=resolve_settings(request),
-        profiles=profs,
-    )
-
-
-@router.get("/alarms", response_model=AlarmsResponse)
-async def api_alarms(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> AlarmsResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    return build_alarms_page(
-        data,
-        as_of=as_of,
-        country=c_norm,
-        settings=resolve_settings(request),
-        notifier=resolve_notifier(request),
-        profiles=profs,
-    )
-
-
 @router.get("/stations", response_model=StationsListResponse)
 async def api_stations(
     request: Request,
-    profile: str = "dev",
+    profile: str | None = None,
     as_of: datetime | None = None,
     country: str | None = None,
 ) -> StationsListResponse:
@@ -213,7 +234,7 @@ async def api_stations(
 async def api_station_detail(
     request: Request,
     station_id: str,
-    profile: str = "dev",
+    profile: str | None = None,
     as_of: datetime | None = None,
     country: str | None = None,
 ) -> StationDetailResponse:
@@ -233,166 +254,6 @@ async def api_station_detail(
         raise HTTPException(status_code=404, detail=f"Không tìm thấy trạm {station_id}") from exc
 
 
-@router.get("/sessions", response_model=SessionsPageResponse)
-async def api_sessions(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-    window_hours: Annotated[int, Query(ge=1, le=720)] = 24,
-    status: str | None = None,
-    station_id: str | None = None,
-    step: Step | None = None,
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
-) -> SessionsPageResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    st_clean = status.strip() if status and status.strip() else None
-    sid_clean = station_id.strip() if station_id and station_id.strip() else None
-    return build_sessions_page(
-        data,
-        as_of=as_of,
-        country=c_norm,
-        window_hours=window_hours,
-        status=st_clean,
-        station_id=sid_clean,
-        step=step,
-        limit=limit,
-        profiles=profs,
-    )
-
-
-@router.get("/sessions/{session_id}", response_model=SessionDetailResponse)
-async def api_session_detail(
-    request: Request,
-    session_id: str,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> SessionDetailResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    try:
-        return build_session_detail(
-            data,
-            session_id,
-            as_of=as_of,
-            country=c_norm,
-            profiles=profs,
-        )
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"Không tìm thấy phiên {session_id}") from exc
-
-
-@router.get("/payments", response_model=PaymentsPageResponse)
-async def api_payments(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> PaymentsPageResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    return build_payments_page(
-        data,
-        as_of=as_of,
-        country=c_norm,
-        profiles=profs,
-    )
-
-
-@router.get("/batteries", response_model=BatteriesPageResponse)
-async def api_batteries(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> BatteriesPageResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    return build_batteries_page(
-        data,
-        as_of=as_of,
-        country=c_norm,
-        profiles=profs,
-    )
-
-
-@router.get("/alerts", response_model=AlertsPageResponse)
-async def api_alerts(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> AlertsPageResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    return build_alerts_page(
-        data,
-        resolve_notifier(request),
-        as_of=as_of,
-        country=c_norm,
-        profiles=profs,
-    )
-
-
-@router.get("/incidents", response_model=IncidentsPlaceholderResponse)
-async def api_incidents(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> IncidentsPlaceholderResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    return build_incidents_placeholder(
-        data,
-        as_of=as_of,
-        country=c_norm,
-        profiles=profs,
-    )
-
-
-@router.get("/metrics", response_model=MetricsPlaceholderResponse)
-async def api_metrics(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> MetricsPlaceholderResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    return build_metrics_placeholder(
-        data,
-        as_of=as_of,
-        country=c_norm,
-        profiles=profs,
-    )
-
-
-@router.get("/ground-truth", response_model=GroundTruthPageResponse)
-async def api_ground_truth(
-    request: Request,
-    profile: str = "dev",
-    as_of: datetime | None = None,
-    country: str | None = None,
-) -> GroundTruthPageResponse:
-    c_norm = normalize_country(country)
-    data, profs = resolve_profile_data(request, profile)
-    settings = resolve_settings(request)
-    try:
-        gt_df = load_ground_truth(data.profile, settings=settings)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return build_ground_truth_page(
-        data,
-        gt_df,
-        as_of=as_of,
-        country=c_norm,
-        profiles=profs,
-    )
-
-
 _VINFAST_BSS_GZ_PATH = Path(__file__).resolve().parent / "static" / "vinfast_bss.json.gz"
 
 
@@ -405,7 +266,7 @@ def _load_vinfast_bss_payloads() -> tuple[bytes, bytes]:
 
 @router.get("/vinfast-bss")
 async def api_vinfast_bss(request: Request) -> Response:
-    """Trả danh sách 43.298 tọa độ Tủ đổi pin thực tế của VinFast `[lat, lon, code, name, addr]`."""
+    """Danh sách tọa độ tủ đổi pin `[lat, lon, code, name, addr, (country)]`."""
     if not _VINFAST_BSS_GZ_PATH.exists():
         raise HTTPException(status_code=404, detail="Chưa có dữ liệu vinfast_bss.json.gz")
     gz_bytes, raw_bytes = _load_vinfast_bss_payloads()

@@ -69,7 +69,11 @@ class SmtpEmailNotifier:
 
     async def send(self, alert: Alert) -> SendResult:
         inc = alert.incident
-        rendered = render_email(alert, feedback_base_url=self.settings.feedback_base_url)
+        rendered = render_email(
+            alert,
+            feedback_base_url=self.settings.feedback_base_url,
+            dashboard_profile=self.settings.dashboard_link_profile,
+        )
 
         if self.settings.notify_mode == "dry_run":
             preview_from = (
@@ -97,7 +101,9 @@ class SmtpEmailNotifier:
     async def send_batch(self, batch: TeamBatch) -> SendResult:
         """Gửi tin gom của 1 team: mail có bảng + CSV đầy đủ đính kèm (CLAUDE.md §8)."""
         rendered = render_batch_email(
-            batch, dashboard_url=f"{self.settings.feedback_base_url.rstrip('/')}/dashboard/alerts"
+            batch,
+            base_url=self.settings.feedback_base_url,
+            dashboard_profile=self.settings.dashboard_link_profile,
         )
 
         def build(mail_from: str, mail_to: str) -> EmailMessage:

@@ -4,35 +4,90 @@
   <meta charset="utf-8">
   <title>{{ subject }}</title>
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #1f2937; line-height: 1.5; max-width: 960px; margin: 0 auto; padding: 16px;">
-  <div style="border: 1px solid #d1d5db; border-top: 4px solid #2563eb; border-radius: 6px; padding: 20px; background: #ffffff;">
-    <p style="margin-top: 0;">Dear Team <strong>{{ team }}</strong>,</p>
-    <p>Tổng hợp giao dịch lỗi trong chu kỳ <strong>{{ window }}</strong>: <strong>{{ n_total }}</strong> giao dịch, <strong>{{ n_incidents }}</strong> incident.<br>Theo nhóm: {{ by_category }}</p>
+{% set th = "padding: 8px 10px; text-align: left; font-size: 12px; color: #475569; font-weight: 600; background: #f8fafc; border-bottom: 1px solid #e2e8f0; white-space: nowrap;" %}
+{% set td = "padding: 8px 10px; font-size: 13px; color: #0f172a; border-bottom: 1px solid #f1f5f9; vertical-align: top;" %}
+{% set sub = "color: #64748b; font-size: 12px;" %}
+{% set link = "color: #1d4ed8; font-weight: 600; text-decoration: none; font-family: Consolas, monospace;" %}
+<body style="margin: 0; padding: 16px; background: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #1f2937; line-height: 1.45;">
+  <table role="presentation" cellpadding="0" cellspacing="0" style="max-width: 980px; width: 100%; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; border-collapse: separate; overflow: hidden;">
+    <tr>
+      <td style="background: #1e3a8a; color: #ffffff; padding: 14px 20px;">
+        <div style="font-size: 16px; font-weight: 700;">Tổng hợp lỗi 15 phút · {{ team }}</div>
+        <div style="font-size: 13px; opacity: 0.9; margin-top: 2px;">Chu kỳ {{ window }}</div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 16px 20px 0;">
+        <p style="margin: 0 0 10px;">Dear Team <strong>{{ team }}</strong>,</p>
+        <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse: separate; border-spacing: 0 0;">
+          <tr>
+            <td style="padding: 8px 16px; background: #eff6ff; border-radius: 6px;"><div style="font-size: 22px; font-weight: 700; color: #1d4ed8;">{{ n_total }}</div><div style="{{ sub }}">giao dịch lỗi</div></td>
+            <td style="width: 8px;"></td>
+            <td style="padding: 8px 16px; background: #f5f3ff; border-radius: 6px;"><div style="font-size: 22px; font-weight: 700; color: #6d28d9;">{{ n_incidents }}</div><div style="{{ sub }}">incident</div></td>
+            <td style="width: 12px;"></td>
+            <td style="vertical-align: middle;">
+              {% for c in by_category_items %}<span style="display: inline-block; margin: 2px 4px 2px 0; padding: 3px 9px; background: #f1f5f9; border-radius: 999px; font-size: 12px; color: #334155;">{{ c.label }} <strong>{{ c.n }}</strong></span>{% endfor %}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
 
     {% if incidents %}
-    <h3 style="font-size: 15px; margin-bottom: 6px;">Incident trong chu kỳ</h3>
-    <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
-      <tr style="background: #f3f4f6;"><th align="left">Incident</th><th align="left">Mức</th><th align="left">Nhóm</th><th align="left">Mã lỗi</th><th align="left">Bước</th><th align="left">Phạm vi</th><th align="right">GD</th><th align="left">Từ</th></tr>
-      {% for i in incidents %}
-      <tr style="border-top: 1px solid #e5e7eb;"><td><code>{{ i.incident_id }}</code></td><td>{{ i.severity }}</td><td>{{ i.category }}{% if i.needs_human_review %} <span style="color:#dc2626;">(cần OPS xem xét)</span>{% endif %}</td><td><code>{{ i.error_code }}</code></td><td>{{ i.step }}</td><td>{{ i.scope }}</td><td align="right">{{ i.n_sessions }}</td><td>{{ i.first_seen }}</td></tr>
-      {% endfor %}
-    </table>
+    <tr>
+      <td style="padding: 18px 20px 0;">
+        <div style="font-size: 14px; font-weight: 700; margin-bottom: 6px;">Incident trong chu kỳ</div>
+        <table cellpadding="0" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #e2e8f0;">
+          <tr><th style="{{ th }}">Mức</th><th style="{{ th }}">Lỗi</th><th style="{{ th }}">Bước</th><th style="{{ th }}">Phạm vi</th><th style="{{ th }} text-align: right;">GD</th><th style="{{ th }}">Từ</th><th style="{{ th }}"></th></tr>
+          {% for i in incidents %}
+          <tr>
+            <td style="{{ td }}"><span style="display: inline-block; padding: 1px 7px; border-radius: 4px; background: {{ i.severity_color }}; color: #ffffff; font-size: 12px; font-weight: 700;">{{ i.severity }}</span></td>
+            <td style="{{ td }}"><code>{{ i.error_code }}</code>{% if i.error_description %}<div style="{{ sub }}">{{ i.error_description }}</div>{% endif %}<div style="{{ sub }} white-space: nowrap;">{{ i.category_label }} · {{ i.incident_id }}{% if i.needs_human_review %} · <span style="color: #dc2626;">cần OPS xem xét</span>{% endif %}</div></td>
+            <td style="{{ td }}">{{ i.step_label }}</td>
+            <td style="{{ td }}">{{ i.scope }}</td>
+            <td style="{{ td }} text-align: right; font-weight: 600;">{{ i.n_sessions }}</td>
+            <td style="{{ td }} white-space: nowrap;">{{ i.first_seen }}</td>
+            <td style="{{ td }} white-space: nowrap;">{% if i.session_url %}<a href="{{ i.session_url }}" style="color: #1d4ed8; font-weight: 600; text-decoration: none;">Xem GD →</a>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </td>
+    </tr>
     {% endif %}
 
-    <h3 style="font-size: 15px; margin-bottom: 6px;">Chi tiết giao dịch ({{ n_shown }}/{{ n_total }} dòng)</h3>
-    <table style="border-collapse: collapse; width: 100%; font-size: 12px;">
-      <tr style="background: #f3f4f6;"><th align="left">Mã GD</th><th align="left">Giờ địa phương trạm</th><th align="left">Nước</th><th align="left">Trạm / Tủ / Khoang</th><th align="left">Bước</th><th align="left">Mã lỗi</th><th align="left">Nhóm</th><th align="left">Mức</th><th align="left">Incident</th></tr>
-      {% for r in rows %}
-      <tr style="border-top: 1px solid #e5e7eb;"><td><code>{{ r.session_id }}</code></td><td>{{ r.local_time }}</td><td>{{ r.country }}</td><td>{{ r.station }}</td><td>{{ r.step }}</td><td><code>{{ r.error_code }}</code></td><td>{{ r.category }}</td><td>{{ r.severity }}</td><td><code>{{ r.incident_id }}</code></td></tr>
-      {% endfor %}
-    </table>
-    {% if n_shown < n_total %}
-    <p style="color: #b45309;">Mail chỉ hiện {{ n_shown }}/{{ n_total }} dòng; xem đủ trong file đính kèm <code>{{ csv_filename }}</code>.</p>
-    {% endif %}
+    <tr>
+      <td style="padding: 18px 20px 0;">
+        <div style="font-size: 14px; font-weight: 700; margin-bottom: 2px;">Chi tiết giao dịch ({{ n_shown }}/{{ n_total }} dòng)</div>
+        <div style="{{ sub }} margin-bottom: 6px;">Bấm mã giao dịch để mở trên dashboard. Giờ là giờ địa phương của trạm.</div>
+        <table cellpadding="0" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #e2e8f0;">
+          <tr><th style="{{ th }}">Mã GD</th><th style="{{ th }}">Giờ địa phương</th><th style="{{ th }}">Trạm / Tủ / Khoang</th><th style="{{ th }}">Bước</th><th style="{{ th }}">Mã lỗi</th><th style="{{ th }}">Mức</th></tr>
+          {% for r in rows %}
+          <tr style="{% if loop.index is even %}background: #fafafa;{% endif %}">
+            <td style="{{ td }} white-space: nowrap;"><a href="{{ r.session_url }}" style="{{ link }}">{{ r.session_id }}</a></td>
+            <td style="{{ td }} white-space: nowrap;">{{ r.local_time }}</td>
+            <td style="{{ td }}">{{ r.station }}<div style="{{ sub }}">{{ r.country }}</div></td>
+            <td style="{{ td }} white-space: nowrap;">{{ r.step_label }}</td>
+            <td style="{{ td }}"><code>{{ r.error_code }}</code><div style="{{ sub }} white-space: nowrap;">{{ r.category_label }}{% if r.incident_id != "—" %} · {{ r.incident_id }}{% endif %}</div></td>
+            <td style="{{ td }}"><span style="color: {{ r.severity_color }}; font-weight: 700;">{{ r.severity }}</span></td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% if n_shown < n_total %}
+        <p style="color: #b45309; font-size: 13px;">Mail chỉ hiện {{ n_shown }}/{{ n_total }} dòng; xem đủ trong file đính kèm <code>{{ csv_filename }}</code>.</p>
+        {% endif %}
+      </td>
+    </tr>
 
-    <p><a href="{{ dashboard_url }}">Mở dashboard</a> · Mã tin gom: <code>{{ batch_id }}</code></p>
-    <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 16px 0;">
-    <p style="font-size: 12px; color: #6b7280; margin-bottom: 0;">-- AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.</p>
-  </div>
+    <tr>
+      <td style="padding: 18px 20px 6px;">
+        <a href="{{ dashboard_url }}" style="display: inline-block; padding: 9px 16px; background: #1d4ed8; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px;">Xem giao dịch lỗi trên dashboard →</a>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding: 10px 20px 16px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
+        Mã tin gom: <code>{{ batch_id }}</code> · -- AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.
+      </td>
+    </tr>
+  </table>
 </body>
 </html>

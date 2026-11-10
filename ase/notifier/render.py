@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlencode
 
 from jinja2 import Environment, FileSystemLoader
 from pydantic import BaseModel
@@ -39,6 +40,44 @@ _ENV = Environment(
     trim_blocks=True,
     lstrip_blocks=True,
 )
+
+
+# Tên bước tiếng Việt cho người đọc mail/card (CLAUDE.md §2); mã bước vẫn có trong CSV.
+STEP_LABELS: dict[Step, str] = {
+    Step.OPEN_APP: "Bước 1 · Mở App",
+    Step.SELECT_SERVICE: "Bước 2 · Chọn dịch vụ đổi pin",
+    Step.SCAN_QR: "Bước 3 · Quét QR",
+    Step.CHECK_ELIGIBILITY: "Bước 4 · Kiểm tra điều kiện",
+    Step.PAYMENT: "Bước 5 · Thanh toán",
+    Step.RETURN_BATTERY: "Bước 6 · Trả pin cũ",
+    Step.RECEIVE_BATTERY: "Bước 7 · Nhận pin mới",
+}
+
+SEVERITY_COLORS: dict[str, str] = {"P1": "#dc2626", "P2": "#d97706", "P3": "#64748b"}
+
+
+def _dashboard_url(base_url: str, params: dict[str, str], profile: str | None) -> str:
+    """Link tới trang Danh sách giao dịch đổi pin (`/dashboard`) kèm bộ lọc."""
+    query = {"profile": profile, **params} if profile else params
+    url = f"{base_url.rstrip('/')}/dashboard"
+    return f"{url}?{urlencode(query)}" if query else url
+
+
+def dashboard_session_url(base_url: str, session_id: str, profile: str | None = None) -> str:
+    """Link mở danh sách giao dịch lọc đúng mã giao dịch này (chỉ đọc)."""
+    return _dashboard_url(base_url, {"emsp_txn_id": session_id}, profile)
+
+
+def dashboard_alerts_url(base_url: str, profile: str | None = None) -> str:
+    """Link mở danh sách giao dịch thất bại (trang Cảnh báo riêng đã bỏ)."""
+    return _dashboard_url(base_url, {"status": "FAILED"}, profile)
+
+
+def error_description(error_code: str | None, knowledge: Knowledge | None = None) -> str:
+    k = knowledge or default_knowledge()
+    if error_code and k.error_catalog.has(error_code):
+        return k.error_catalog.by_code[error_code].description
+    return ""
 
 
 class RenderedEmail(BaseModel):
@@ -99,6 +138,7 @@ def render_email(
     alert: Alert,
     feedback_base_url: str = "http://localhost:8000",
     knowledge: Knowledge | None = None,
+    dashboard_profile: str | None = None,
 ) -> RenderedEmail:
     inc = alert.incident
     k = knowledge or default_knowledge()
@@ -121,7 +161,14 @@ def render_email(
         "country_display": format_country(inc),
         "station_display": format_station_scope(inc),
         "step": inc.step.value,
+        "step_label": STEP_LABELS[inc.step],
         "step_description": step_description_for(inc.step, inc.error_code, k),
+        "error_description": error_description(inc.error_code, k),
+        "severity_color": SEVERITY_COLORS.get(inc.severity.value, "#64748b"),
+        "session_url": dashboard_session_url(
+            feedback_base_url, inc.session_ids[0], dashboard_profile
+        ),
+        "alerts_url": dashboard_alerts_url(feedback_base_url, dashboard_profile),
         "error_code_display": inc.error_code or "—",
         "category_code": inc.category.value,
         "category_label": label,

@@ -6,7 +6,7 @@
   <title>{% block title %}ASE BSS NOC Dashboard{% endblock %}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="https://unpkg.com/@vietmap/vietmap-gl-js@6.0.1/dist/vietmap-gl.css">
-  <link rel="stylesheet" href="/static/dashboard/dashboard.css">
+  <link rel="stylesheet" href="/static/dashboard/dashboard.css?v=3">
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
   {# Thứ tự bắt buộc theo tài liệu Vietmap: Leaflet -> VIETMAP GL JS -> plugin #}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -67,16 +67,9 @@
     </div>
 
     <nav class="noc-nav">
-      <a href="/dashboard?{{ q_base }}" class="nav-tab {% if active_tab == 'overview' %}active{% endif %}">Tổng quan</a>
+      <a href="/dashboard?{{ q_base }}" class="nav-tab {% if active_tab == 'transactions' %}active{% endif %}">Giao dịch đổi pin</a>
+      <a href="/dashboard/map?{{ q_base }}" class="nav-tab {% if active_tab == 'map' %}active{% endif %}">Bản đồ trạm</a>
       <a href="/dashboard/stations?{{ q_base }}" class="nav-tab {% if active_tab == 'stations' %}active{% endif %}">Trạm &amp; Tủ</a>
-      <a href="/dashboard/sessions?{{ q_base }}" class="nav-tab {% if active_tab == 'sessions' %}active{% endif %}">Giao dịch</a>
-      <a href="/dashboard/payments?{{ q_base }}" class="nav-tab {% if active_tab == 'payments' %}active{% endif %}">Thanh toán</a>
-      <a href="/dashboard/batteries?{{ q_base }}" class="nav-tab {% if active_tab == 'batteries' %}active{% endif %}">Pin</a>
-      <a href="/dashboard/alerts?{{ q_base }}" class="nav-tab {% if active_tab == 'alerts' %}active{% endif %}">Cảnh báo</a>
-      <a href="/dashboard/incidents?{{ q_base }}" class="nav-tab {% if active_tab == 'incidents' %}active{% endif %}">Incident</a>
-      <a href="/dashboard/metrics?{{ q_base }}" class="nav-tab {% if active_tab == 'metrics' %}active{% endif %}">Metric SF1–SF9</a>
-      <a href="/dashboard/ground-truth?{{ q_base }}" class="nav-tab nav-mock {% if active_tab == 'ground_truth' %}active{% endif %}">Kiểm chứng (mock)</a>
-      <a href="/" class="nav-tab nav-teams">💬 Mock Microsoft Teams</a>
     </nav>
   </header>
 
@@ -92,7 +85,7 @@
   </main>
 
   <script type="application/json" id="page-data">{{ data | safe_json }}</script>
-  <script src="/static/dashboard/dashboard.js"></script>
+  <script src="/static/dashboard/dashboard.js?v=3"></script>
 </body>
 </html>
 

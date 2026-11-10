@@ -31,7 +31,7 @@ from ase.detector.fields import FieldView
 from ase.detector.main import run_detector
 from ase.detector.output import build_incident_records
 from ase.knowledge.loader import Knowledge, default_knowledge
-from ase.notifier.batch import render_batch_email
+from ase.notifier.batch import build_batch_card, render_batch_email
 from ase.notifier.email_smtp import SmtpEmailNotifier
 from ase.notifier.router import Alert, SendResult
 from ase.notifier.service import NotifierService
@@ -515,6 +515,19 @@ def test_batch_mail_truncates_rows_but_csv_has_all_and_local_time() -> None:
     assert "S006" in rendered.csv_text and "S006" not in rendered.text_body
     assert "18:00:00 04/11/2026 (GMT+8)" in rendered.text_body  # giờ trạm PH
     assert "(GMT+7)" in rendered.subject  # chu kỳ theo giờ đội OPS (daily_report_timezone)
+
+
+def test_batch_mail_and_card_link_each_session_to_dashboard() -> None:
+    batch = _batch(2)
+    rendered = render_batch_email(batch, knowledge=K, dashboard_profile="dev")
+    sid = batch.rows[0].session_id
+    url = f"http://localhost:8000/dashboard?profile=dev&emsp_txn_id={sid}"
+    assert url.replace("&", "&amp;") in rendered.html_body and url in rendered.text_body
+    card = build_batch_card(batch, knowledge=K, dashboard_profile="dev")
+    card_str = json.dumps(card, ensure_ascii=False)
+    if batch.incidents:
+        assert "selectAction" in card_str
+    assert "http://localhost:8000/dashboard?profile=dev&status=FAILED" in card_str
 
 
 class _FakeChannel:

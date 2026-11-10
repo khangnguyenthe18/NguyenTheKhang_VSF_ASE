@@ -5,15 +5,17 @@ Theo nhóm: {{ by_category }}
 
 Incident trong chu kỳ:
 {% for i in incidents %}
-• {{ i.incident_id }} [{{ i.severity }}] {{ i.category }} – {{ i.error_code }} – bước {{ i.step }} – {{ i.scope }} – {{ i.n_sessions }} GD / {{ i.n_stations }} trạm – từ {{ i.first_seen }}{% if i.needs_human_review %} [Cần OPS xem xét]{% endif %}
-
+• {{ i.incident_id }} [{{ i.severity }}] {{ i.category }} – {{ i.error_code }} – {{ i.step_label }} – {{ i.scope }} – {{ i.n_sessions }} GD / {{ i.n_stations }} trạm – từ {{ i.first_seen }}{% if i.needs_human_review %} [Cần OPS xem xét]{% endif %}
+{% if i.session_url %}  Xem GD: {{ i.session_url }}
+{% endif %}
 {% else %}
 • (không có incident; lỗi người dùng đơn lẻ)
 {% endfor %}
 
 Chi tiết giao dịch ({{ n_shown }}/{{ n_total }} dòng{% if n_shown < n_total %}, xem đủ trong {{ csv_filename }}{% endif %}):
 {% for r in rows %}
-- {{ r.session_id }} | {{ r.local_time }} | {{ r.country }} | {{ r.station }} | {{ r.step }} | {{ r.error_code }} | {{ r.category }} | {{ r.severity }} | {{ r.incident_id }}
+- {{ r.session_id }} | {{ r.local_time }} | {{ r.country }} | {{ r.station }} | {{ r.step_label }} | {{ r.error_code }} | {{ r.category }} | {{ r.severity }} | {{ r.incident_id }}
+  {{ r.session_url }}
 {% endfor %}
 
 File đính kèm: {{ csv_filename }} (đủ {{ n_total }} dòng)

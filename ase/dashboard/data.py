@@ -2,8 +2,7 @@
 
 Nguyên tắc:
 - Read-only: chỉ đọc Parquet, JSONL và SQLite (mode=ro), tuyệt đối không ghi file.
-- Tách biệt Ground Truth: `load_profile_data` KHÔNG đọc `ground_truth.csv`.
-  Chỉ `load_ground_truth` (dùng riêng cho tab Kiểm chứng mock) mới đọc `ground_truth.csv`.
+- Không đọc Ground Truth: dashboard chỉ hiển thị dữ liệu vận hành, không đọc `ground_truth.csv`.
 - Cache theo mtime của `manifest.json` để mọi API trả kết quả dưới 1 giây sau lần nạp đầu.
 """
 
@@ -205,21 +204,6 @@ def load_profile_data(
     )
     _PROFILE_CACHE[profile_dir] = loaded
     return loaded
-
-
-def load_ground_truth(
-    profile: str = "dev",
-    *,
-    settings: Settings | None = None,
-    data_dir: Path | None = None,
-) -> pl.DataFrame:
-    """Chỉ dùng cho tab Kiểm chứng (mock) (`/dashboard/ground-truth`)."""
-    cfg = settings or get_settings()
-    base_dir = data_dir if data_dir is not None else cfg.data_dir
-    gt_path = (base_dir / profile / "ground_truth.csv").resolve()
-    if not gt_path.exists():
-        raise FileNotFoundError(f"Không tìm thấy ground_truth.csv tại {gt_path}")
-    return pl.read_csv(gt_path)
 
 
 def read_notifier_sqlite(db_path: Path) -> NotifierSnapshot:

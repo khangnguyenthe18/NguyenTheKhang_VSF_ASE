@@ -1,1 +1,1 @@
-"""Dashboard vận hành mạng lưới BSS (DASHBOARD_PLAN.md)."""
+"""Dashboard vận hành mạng lưới BSS (docs/DASHBOARD_PLAN.md)."""

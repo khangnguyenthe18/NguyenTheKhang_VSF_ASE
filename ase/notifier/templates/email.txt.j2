@@ -5,11 +5,12 @@ Hệ thống kiểm tra có giao dịch lỗi có thể liên quan đến {{ cat
 [Cập nhật lần #{{ revision }}]
 {% endif %}
 • Mã giao dịch : {{ session_id }}
+  Xem trên dashboard: {{ session_url }}
 • Thời gian    : {{ time_display }}
 • Quốc gia     : {{ country_display }}
 • Trạm / Tủ    : {{ station_display }}
-• Bước lỗi     : {{ step }} – {{ step_description }}
-• Mã lỗi       : {{ error_code_display }}
+• Bước lỗi     : {{ step_label }} ({{ step }} – {{ step_description }})
+• Mã lỗi       : {{ error_code_display }}{% if error_description %} – {{ error_description }}{% endif %}
 • Phân loại AI : {{ category_code }} ({{ category_label }}) – {{ severity }} – Độ tin cậy {{ confidence_display }}{% if needs_human_review %} [Cần OPS xem xét]{% endif %}
 • Phạm vi      : {{ n_sessions }} giao dịch cùng lỗi tại {{ n_stations }} trạm trong {{ window_minutes }} phút ({{ incident_id }})
 

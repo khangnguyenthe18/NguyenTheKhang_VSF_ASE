@@ -1,0 +1,158 @@
+{% extends "base.html.j2" %}
+{% block title %}Danh sách giao dịch đổi pin — ASE BSS NOC{% endblock %}
+{% block content %}
+{# Tham số giữ nguyên khi đổi trang / tìm kiếm / xuất: profile, quốc gia, as_of + bộ lọc #}
+{% set f = data.filters %}
+{% set ctx = {"profile": meta.profile, "country": meta.country or "", "as_of": meta.as_of.isoformat()} %}
+{% set filter_params = {
+  "station_id": f.station_id, "cabinet_id": f.cabinet_id, "cabinet_serial": f.cabinet_serial,
+  "emsp_txn_id": f.emsp_txn_id, "cabinet_txn_id": f.cabinet_txn_id, "battery_serial": f.battery_serial,
+  "date_from": f.date_from, "date_to": f.date_to
+} %}
+{% macro hidden(params) -%}
+  {% for k, v in params.items() if v %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+{%- endmacro %}
+{% macro qs(extra) -%}
+  {%- set parts = [] -%}
+  {%- for k, v in ctx.items() if v %}{% set _ = parts.append(k ~ "=" ~ (v | urlencode)) %}{% endfor -%}
+  {%- for k, v in filter_params.items() if v %}{% set _ = parts.append(k ~ "=" ~ (v | urlencode)) %}{% endfor -%}
+  {%- for s in f.statuses %}{% set _ = parts.append("status=" ~ s) %}{% endfor -%}
+  {%- if f.q %}{% set _ = parts.append("q=" ~ (f.q | urlencode)) %}{% endif -%}
+  {%- for k, v in extra.items() %}{% set _ = parts.append(k ~ "=" ~ (v | string | urlencode)) %}{% endfor -%}
+  {{ parts | join("&") }}
+{%- endmacro %}
+{% set status_class = {"CREATED": "txn-created", "BATTERY_IN": "txn-battery-in", "COMPLETED": "txn-completed", "FAILED": "txn-failed"} %}
+
+<nav class="txn-breadcrumb" aria-label="breadcrumb">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21H3z"/></svg>
+  <span>Trang chủ</span><span class="txn-breadcrumb-sep">/</span><span class="txn-breadcrumb-current">Giao dịch đổi pin</span>
+</nav>
+<h1 class="txn-title">Danh sách giao dịch đổi pin</h1>
+
+<div class="txn-toolbar">
+  <form method="get" action="/dashboard" class="txn-search" role="search">
+    {{ hidden(ctx) }}{{ hidden(filter_params) }}
+    {% for s in f.statuses %}<input type="hidden" name="status" value="{{ s }}">{% endfor %}
+    <input type="hidden" name="page_size" value="{{ data.page_size }}">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input type="search" name="q" value="{{ f.q }}" placeholder="Tìm kiếm mã trạm, tủ, giao dịch EMSP" aria-label="Tìm kiếm mã trạm, tủ, giao dịch EMSP">
+  </form>
+  <button type="button" class="txn-btn" id="txn-filter-open" aria-controls="txn-filter-drawer" aria-expanded="false">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+    Bộ lọc{% if f.active_count %} <span class="txn-badge">{{ f.active_count }}</span>{% endif %}
+  </button>
+  <span class="txn-total">{{ "{:,}".format(data.total).replace(",", ".") }} giao dịch</span>
+  <a class="txn-btn txn-export" href="/dashboard/transactions/export?{{ qs({}) }}">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 12v6M9 15l3 3 3-3"/></svg>
+    Xuất dữ liệu
+  </a>
+</div>
+
+<div class="txn-table-wrap">
+  <table class="txn-table">
+    <thead>
+      <tr>
+        <th class="txn-col-stt">STT</th>
+        {% for _, title in data.columns %}<th>{{ title }}</th>{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in data.rows %}
+      <tr>
+        <td class="txn-col-stt">{{ r.stt }}</td>
+        <td>{{ r.station_id }}</td>
+        <td>{{ r.cabinet_id or "" }}</td>
+        <td class="txn-wrap">{{ r.cabinet_serial or "" }}</td>
+        <td class="txn-mono">{{ r.emsp_txn_id }}</td>
+        <td>{{ r.cabinet_txn_id or "" }}</td>
+        <td class="txn-nowrap">{{ r.started_local }}</td>
+        <td><span class="txn-status {{ status_class[r.status] }}">{{ r.status_label }}</span></td>
+        <td>{{ r.error_code or "" }}</td>
+        <td class="txn-mono">{{ r.battery_in_id or "" }}</td>
+        <td class="txn-mono">{{ r.battery_out_id or "" }}</td>
+        <td>{{ r.slot_in or "" }}</td>
+        <td>{{ r.soh_in if r.soh_in is not none else "" }}</td>
+        <td>{{ r.soc_in if r.soc_in is not none else "" }}</td>
+        <td>{{ r.slot_out or "" }}</td>
+        <td>{{ r.soh_out if r.soh_out is not none else "" }}</td>
+        <td>{{ r.soc_out if r.soc_out is not none else "" }}</td>
+        <td class="txn-nowrap">{{ r.battery_in_local or "" }}</td>
+        <td class="txn-nowrap">{{ r.battery_out_local or "" }}</td>
+      </tr>
+      {% else %}
+      <tr><td class="txn-empty" colspan="{{ data.columns | length + 1 }}">Không có giao dịch nào khớp bộ lọc.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="txn-pager">
+  <form method="get" action="/dashboard" class="txn-pagesize">
+    {{ hidden(ctx) }}{{ hidden(filter_params) }}
+    {% for s in f.statuses %}<input type="hidden" name="status" value="{{ s }}">{% endfor %}
+    {% if f.q %}<input type="hidden" name="q" value="{{ f.q }}">{% endif %}
+    <label>Số dòng/trang
+      <select name="page_size" id="txn-page-size">
+        {% for n in page_sizes %}<option value="{{ n }}" {% if n == data.page_size %}selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+    </label>
+  </form>
+  <span>Trang {{ data.page }} / {{ data.total_pages }}</span>
+  <div class="txn-pager-nav">
+    {% if data.page > 1 %}
+      <a class="txn-btn" href="/dashboard?{{ qs({'page': 1, 'page_size': data.page_size}) }}" aria-label="Trang đầu">«</a>
+      <a class="txn-btn" href="/dashboard?{{ qs({'page': data.page - 1, 'page_size': data.page_size}) }}" aria-label="Trang trước">‹</a>
+    {% endif %}
+    {% if data.page < data.total_pages %}
+      <a class="txn-btn" href="/dashboard?{{ qs({'page': data.page + 1, 'page_size': data.page_size}) }}" aria-label="Trang sau">›</a>
+      <a class="txn-btn" href="/dashboard?{{ qs({'page': data.total_pages, 'page_size': data.page_size}) }}" aria-label="Trang cuối">»</a>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Bộ lọc trượt từ phải, giống màn hình thật -->
+<div class="txn-drawer-backdrop" id="txn-filter-backdrop" hidden></div>
+<aside class="txn-drawer" id="txn-filter-drawer" aria-label="Bộ lọc" aria-hidden="true">
+  <form method="get" action="/dashboard" id="txn-filter-form">
+    {{ hidden(ctx) }}
+    {% if f.q %}<input type="hidden" name="q" value="{{ f.q }}">{% endif %}
+    <input type="hidden" name="page_size" value="{{ data.page_size }}">
+    <div class="txn-drawer-head">
+      <strong>Bộ lọc</strong>
+      <button type="button" class="txn-drawer-close" id="txn-filter-close" aria-label="Đóng">×</button>
+    </div>
+    <div class="txn-drawer-body">
+      <details class="txn-group" open>
+        <summary>Trạm - Tủ</summary>
+        {% for name, label in [("station_id", "Mã trạm"), ("cabinet_id", "Mã tủ"), ("cabinet_serial", "S/N tủ pin"), ("emsp_txn_id", "Mã giao dịch trên eMSP"), ("cabinet_txn_id", "Mã giao dịch trên tủ"), ("battery_serial", "Serial Pin")] %}
+        <label class="txn-field">{{ label }}
+          <input type="text" name="{{ name }}" value="{{ f[name] }}" placeholder="Tìm kiếm">
+        </label>
+        {% endfor %}
+      </details>
+      <details class="txn-group" open>
+        <summary>Ngày thực hiện</summary>
+        <label class="txn-field">Ngày thực hiện từ
+          <input type="datetime-local" name="date_from" value="{{ f.date_from }}">
+        </label>
+        <label class="txn-field">Ngày thực hiện đến
+          <input type="datetime-local" name="date_to" value="{{ f.date_to }}">
+        </label>
+        <p class="txn-hint">Theo giờ địa phương của trạm.</p>
+      </details>
+      <details class="txn-group" open>
+        <summary>Trạng thái</summary>
+        {% for value, label in data.status_choices %}
+        <label class="txn-check">{{ label }}
+          <input type="checkbox" name="status" value="{{ value }}" {% if value in f.statuses %}checked{% endif %}>
+        </label>
+        {% endfor %}
+      </details>
+    </div>
+    <div class="txn-drawer-foot">
+      <button type="button" class="txn-btn" id="txn-filter-reset">Đặt lại</button>
+      <button type="submit" class="txn-btn txn-btn-primary">Xác nhận</button>
+    </div>
+  </form>
+</aside>
+{% endblock %}

@@ -74,6 +74,10 @@ stream-up:
 stream-down:
 	docker compose down
 
+# Trần số cảnh báo/lần chạy cho stream-demo (mặc định notifier = 20 để chặn bão mail khi có bug;
+# demo 286 trạm × 3 ngày cần ~1.000 tin gom + P1). Các lệnh khác giữ mặc định 20.
+DEMO_MAX_ALERTS ?= 5000
+
 stream-demo: stream-up
 	@test -f data/$(PROFILE)/ase.swap.events.jsonl || $(UV_RUN) python -m ase.simulator --profile $(PROFILE)
 	@docker exec ase-redpanda rpk topic delete ase.swap.events ase.cabinet.telemetry -X brokers=127.0.0.1:19092 >/dev/null 2>&1 || true
@@ -82,13 +86,12 @@ stream-demo: stream-up
 	@echo "================================================================"
 	@echo "Stream Demo (profile=$(PROFILE), speed=$(SPEED))"
 	@echo "  - NOC Dashboard: http://localhost:8000/dashboard?profile=$(PROFILE)"
-	@echo "  - Mock Teams:    http://localhost:8000"
 	@echo "  - Mailpit:       http://localhost:8025"
 	@echo "================================================================"
 	@bash -c '\
 	  trap "kill \$$BRIDGE_PID \$$DET_PID 2>/dev/null || true" EXIT INT TERM; \
 	  $(UV_RUN) python -m ase.streaming.bridge & BRIDGE_PID=$$!; \
-	  $(UV_RUN) python -m ase.detector --profile $(PROFILE) --source kafka --notify --max-idle-seconds 12 & DET_PID=$$!; \
+	  ASE_MAX_ALERTS_PER_RUN=$(DEMO_MAX_ALERTS) $(UV_RUN) python -m ase.detector --profile $(PROFILE) --source kafka --notify --max-idle-seconds 12 --startup-timeout-seconds 300 & DET_PID=$$!; \
 	  sleep 3.5; \
 	  $(UV_RUN) python -m ase.streaming.publisher --profile $(PROFILE) --speed $(SPEED); \
 	  wait $$DET_PID; \
@@ -108,7 +111,7 @@ e2e: stream-up
 	  fi; \
 	  trap "kill \$$BRIDGE_PID \$$DET_PID \$$TEAMS_PID 2>/dev/null || true" EXIT INT TERM; \
 	  $(UV_RUN) python -m ase.streaming.bridge & BRIDGE_PID=$$!; \
-	  $(UV_RUN) python -m ase.detector --profile $(PROFILE) --source kafka --notify --max-idle-seconds 6 & DET_PID=$$!; \
+	  $(UV_RUN) python -m ase.detector --profile $(PROFILE) --source kafka --notify --max-idle-seconds 6 --startup-timeout-seconds 300 & DET_PID=$$!; \
 	  sleep 3.5; \
 	  $(UV_RUN) python -m ase.streaming.publisher --profile $(PROFILE) --speed $(E2E_SPEED) --path-yield-ms $(E2E_PATH_YIELD_MS); \
 	  wait $$DET_PID; \
@@ -131,6 +134,5 @@ demo:
 	@echo "================================================================"
 	@echo "Demo ready! (dashboard đang chạy ở terminal kia) Mở:"
 	@echo "  - NOC Dashboard: http://localhost:8000/dashboard?profile=demo"
-	@echo "  - Mock Teams:    http://localhost:8000"
 	@echo "  - Mailpit:       http://localhost:8025"
 	@echo "================================================================"
