@@ -227,7 +227,9 @@ async def generate(
         written += _write_table(
             out_dir, "payments", [r.payment for r in results if r.payment is not None], jsonl=True
         )
-        written += _write_table(out_dir, "cabinet_telemetry", telemetry, jsonl=True)
+        written += _write_table(
+            out_dir, "cabinet_telemetry", telemetry, jsonl=profile.telemetry_jsonl
+        )
         return written
 
     paths += await asyncio.to_thread(write_all)

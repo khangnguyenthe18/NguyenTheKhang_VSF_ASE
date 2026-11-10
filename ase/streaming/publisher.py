@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -46,12 +47,22 @@ class PublishStats:
     mqtt_telemetry: int = 0
 
 
-def _load_sorted_telemetry(profile_dir: Path) -> list[CabinetTelemetry]:
+_TELEMETRY_BATCH_ROWS = 20_000
+
+
+def _iter_sorted_telemetry(profile_dir: Path) -> Iterator[CabinetTelemetry]:
+    """Telemetry sắp theo `heartbeat_at`, tạo model theo từng lô.
+
+    Vì sao không nạp hết thành list: profile `demo` có hàng triệu dòng heartbeat; tạo trước toàn
+    bộ model Pydantic mất ~17 s và ~5 GB RAM trước khi phát được message đầu tiên.
+    """
     path = profile_dir / "cabinet_telemetry.parquet"
     if not path.exists():
-        return []
-    df = pl.read_parquet(path).sort("heartbeat_at")
-    return [CabinetTelemetry.model_validate(row) for row in df.iter_rows(named=True)]
+        return
+    df = pl.read_parquet(path).sort("heartbeat_at", maintain_order=True)
+    for chunk in df.iter_slices(_TELEMETRY_BATCH_ROWS):
+        for row in chunk.iter_rows(named=True):
+            yield CabinetTelemetry.model_validate(row)
 
 
 async def run_publisher(
@@ -67,9 +78,8 @@ async def run_publisher(
     cfg = settings or get_settings()
     station_countries = load_station_country_map(profile_dir)
     cabinet_locations = load_cabinet_location_map(profile_dir)
-    telemetry_rows = _load_sorted_telemetry(profile_dir) if include_telemetry else []
-    tel_idx = 0
-    n_tel = len(telemetry_rows)
+    tel_iter = _iter_sorted_telemetry(profile_dir) if include_telemetry else iter(())
+    next_tel: CabinetTelemetry | None = next(tel_iter, None)
 
     owns_sink = kafka_sink is None
     sink = kafka_sink if kafka_sink is not None else KafkaSink(settings=cfg)
@@ -112,7 +122,7 @@ async def run_publisher(
         ev_client: Any,
         tel_client: Any,
     ) -> None:
-        nonlocal tel_idx, last_was_mqtt_event
+        nonlocal next_tel, last_was_mqtt_event
         events_path = profile_dir / "ase.swap.events.jsonl"
         with events_path.open(encoding="utf-8") as f:
             for line in f:
@@ -121,11 +131,9 @@ async def run_publisher(
                 ev = SwapEvent.model_validate_json(line)
                 ev_utc = ensure_utc(ev.occurred_at)
 
-                while (
-                    tel_idx < n_tel and ensure_utc(telemetry_rows[tel_idx].heartbeat_at) <= ev_utc
-                ):
-                    await _publish_telemetry(tel_client, telemetry_rows[tel_idx])
-                    tel_idx += 1
+                while next_tel is not None and ensure_utc(next_tel.heartbeat_at) <= ev_utc:
+                    await _publish_telemetry(tel_client, next_tel)
+                    next_tel = next(tel_iter, None)
 
                 if ev.step in CABINET_STEPS:
                     await _pace(ev_utc)
@@ -140,9 +148,9 @@ async def run_publisher(
                     stats.kafka_events += 1
                     last_was_mqtt_event = False
 
-        while tel_idx < n_tel:
-            await _publish_telemetry(tel_client, telemetry_rows[tel_idx])
-            tel_idx += 1
+        while next_tel is not None:
+            await _publish_telemetry(tel_client, next_tel)
+            next_tel = next(tel_iter, None)
 
     try:
         if mqtt_client is not None:

@@ -85,9 +85,12 @@ profiles:
     seed: 3042
     start_date: 2026-10-30
     days: 3
-    sessions_per_day: 6000
-    stations: {VN: 28, PH: 7, ID: 5}
+    sessions_per_day: 43000             # ~150 phiên/trạm/ngày
+    # Số trạm tỷ lệ với traffic_weight (VN 70 / PH 17 / ID 13) để mọi trạm có tải ~150 phiên/ngày.
+    stations: {VN: 200, PH: 48, ID: 38}  # ID: 19 WIB + 19 WITA
     split: {baseline_days: 0, after: demo}
+    real_sites: true        # trạm VN đặt tại tủ VinFast thật, chọn theo tỷ lệ số tủ từng tỉnh
+    telemetry_jsonl: false  # chỉ ghi cabinet_telemetry.parquet (bản JSONL ~0,5 GB, không ai đọc)
   eval:
     seed: 2042
     test_seed: 9042

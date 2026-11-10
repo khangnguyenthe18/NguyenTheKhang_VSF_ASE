@@ -9,6 +9,7 @@ from ase.common import ids
 from ase.common.models import Battery, Cabinet, Slot, Station, User
 from ase.knowledge.loader import Knowledge
 from ase.simulator.profiles import CommonSpec, ProfileSpec
+from ase.simulator.real_sites import RealSite, load_real_sites, sample_sites
 from ase.simulator.rng import substream
 
 USER_NORMAL = "normal"
@@ -60,6 +61,13 @@ def build_world(profile: ProfileSpec, common: CommonSpec, knowledge: Knowledge) 
     }
 
     battery_seq = 0
+    real: list[RealSite] = []
+    if profile.real_sites and profile.stations.get("VN", 0) > 0:
+        all_sites = load_real_sites()
+        if all_sites is None:
+            print("[simulator] không có vinfast_bss.json.gz: trạm VN đặt theo thành phố")
+        else:
+            real = sample_sites(all_sites, profile.stations["VN"], substream(seed, "real_sites"))
     for country, n_stations in profile.stations.items():
         spec = knowledge.countries.countries[country]
         tz_city_idx: dict[str, int] = {}
@@ -71,7 +79,11 @@ def build_world(profile: ProfileSpec, common: CommonSpec, knowledge: Knowledge) 
             install = start - timedelta(days=rng.randint(120, 600))
             geo_rng = substream(seed, "geo", station_id)
             tz_cities = spec.cities_for_timezone(tz)
-            if tz_cities:
+            site_code: str | None = None
+            if country == "VN" and real:
+                site = real[n - 1]
+                lat, lon, site_code = site.lat, site.lon, site.code
+            elif tz_cities:
                 c_idx = tz_city_idx.get(tz, 0)
                 tz_city_idx[tz] = c_idx + 1
                 city = tz_cities[c_idx % len(tz_cities)]
@@ -87,6 +99,7 @@ def build_world(profile: ProfileSpec, common: CommonSpec, knowledge: Knowledge) 
                 install_date=install,
                 lat=lat,
                 lon=lon,
+                site_code=site_code,
             )
             world.stations.append(station)
             world.station_by_id[station_id] = station

@@ -202,6 +202,7 @@ class Station(_Table):
     install_date: datetime
     lat: float = 0.0
     lon: float = 0.0
+    site_code: str | None = None  # mã tủ VinFast thật lấy toạ độ (chỉ profile bật real_sites)
 
     _aware = field_validator("install_date")(_require_aware)
 

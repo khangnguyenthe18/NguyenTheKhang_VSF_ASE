@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     mail_from: str | None = "ase-alerts@ase.local"
     mail_to: str | None = "ops@ase.local"
     teams_url: str = "http://localhost:8000"
+    # Trang xem card mock Teams ở "/" (tạm tắt theo chủ dự án: "/" chuyển thẳng vào dashboard).
+    # Endpoint nhận card `/webhook/*` và nút phản hồi `/feedback/*` luôn chạy.
+    mock_teams_ui: bool = False
     feedback_base_url: str = "http://localhost:8000"
     notifier_db: Path = ROOT / "data" / "notifier.sqlite"
     preview_dir: Path = ROOT / "data" / "outbox_preview"
@@ -39,6 +42,11 @@ class Settings(BaseSettings):
     max_alerts_per_run: int = Field(default=20, ge=1)
 
     # Dashboard settings (DASHBOARD_PLAN §6)
+    # Profile mở mặc định khi URL không có `?profile=`; chưa sinh profile này thì dùng `dev`.
+    dashboard_profile: str = "demo"
+    # Profile gắn vào link dashboard trong mail/card (`?profile=`); detector đặt theo `--profile`.
+    # None → không gắn, dashboard dùng `dashboard_profile`.
+    dashboard_link_profile: str | None = None
     cabinet_online_window_seconds: int = Field(default=120, ge=1)
     station_warn_fail_rate: float = Field(default=0.10, ge=0.0, le=1.0)
     ready_battery_soc_pct: float = Field(default=90.0, ge=0.0, le=100.0)

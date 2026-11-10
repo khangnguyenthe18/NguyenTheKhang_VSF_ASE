@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, Protocol
@@ -57,7 +58,12 @@ class _ConsumerPartitionProgress:
 
 
 class KafkaSource:
-    """`EventSource` đọc `SwapEvent` từ Kafka topic, tự dừng khi idle quá `max_idle_seconds`."""
+    """`EventSource` đọc `SwapEvent` từ Kafka topic, tự dừng khi idle quá `max_idle_seconds`.
+
+    Trước message đầu tiên chờ tối đa `startup_timeout_seconds` (đồng hồ thật): publisher có thể
+    mất hàng chục giây để nạp dữ liệu profile lớn (`demo`) trước khi phát; nếu dùng luôn ngưỡng
+    idle thì detector tưởng hết dữ liệu và thoát với 0 event.
+    """
 
     def __init__(
         self,
@@ -66,6 +72,7 @@ class KafkaSource:
         topic: str | None = None,
         group_id: str | None = None,
         max_idle_seconds: float = 10.0,
+        startup_timeout_seconds: float = 0.0,
         consumer: Any | None = None,
         clock: SimClock | None = None,
         progress: PartitionProgress | None = None,
@@ -74,6 +81,7 @@ class KafkaSource:
         self.topic = topic or self.settings.kafka_events_topic
         self.group_id = group_id if group_id is not None else self.settings.kafka_group_id
         self.max_idle_seconds = max_idle_seconds
+        self.startup_timeout_seconds = startup_timeout_seconds
         self._consumer = consumer
         self.clock = clock
         self._progress = progress
@@ -158,10 +166,17 @@ class KafkaSource:
             getmany_fn = getattr(consumer, "getmany", None)
             if callable(getmany_fn):
                 timeout_ms = max(1, int(self.max_idle_seconds * 1000))
+                started = time.monotonic()
+                got_any = False
                 while True:
                     batches: dict[Any, list[Any]] = await getmany_fn(timeout_ms=timeout_ms)
                     if not batches or not any(batches.values()):
+                        waited = time.monotonic() - started
+                        if not got_any and waited < self.startup_timeout_seconds:
+                            log.info("kafka_waiting_first_message", waited_s=round(waited, 1))
+                            continue
                         break
+                    got_any = True
                     known_partitions.update(batches.keys())
                     for q, recs in batches.items():
                         rem_in_batch[q] = len(recs)
@@ -195,11 +210,20 @@ class KafkaSource:
                 return
 
             aiter = consumer.__aiter__()
+            started = time.monotonic()
+            got_first = False
             while True:
                 try:
                     msg = await asyncio.wait_for(aiter.__anext__(), timeout=self.max_idle_seconds)
-                except (TimeoutError, StopAsyncIteration):
+                except StopAsyncIteration:
                     break
+                except TimeoutError:
+                    waited = time.monotonic() - started
+                    if not got_first and waited < self.startup_timeout_seconds:
+                        log.info("kafka_waiting_first_message", waited_s=round(waited, 1))
+                        continue
+                    break
+                got_first = True
                 ev = self._decode_raw(getattr(msg, "value", msg))
                 if ev is not None:
                     if self.clock is not None:

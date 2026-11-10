@@ -1,4 +1,4 @@
-"""Detector rule-only cho ASE (CLAUDE.md §15 bước 3, DETECTOR_PLAN.md)."""
+"""Detector rule-only cho ASE (CLAUDE.md §15 bước 3, docs/DETECTOR_PLAN.md)."""
 
 from __future__ import annotations
 

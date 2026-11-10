@@ -750,3 +750,22 @@ async def test_run_detector_default_vs_injected_jsonl_source_byte_identical(
     actual_sha = _sha_dir(r_default.out_dir)
     for fname, sha in expected_smoke_jsonl_sha.items():
         assert actual_sha[fname] == sha
+
+
+async def test_kafka_source_waits_for_first_message_within_startup_timeout() -> None:
+    """Publisher nạp profile lớn chậm: lô rỗng TRƯỚC message đầu tiên không làm detector thoát
+    khi còn trong `startup_timeout_seconds`; không đặt thì thoát ngay (hành vi cũ)."""
+    ev = _ev(event_id="late-1", session_id="s-late", occurred_at=T0)
+
+    def _consumer() -> _FakePartitionedConsumer:
+        return _FakePartitionedConsumer(
+            [{}, {}, {0: [_FakeKafkaRecord(encode_event(ev))]}],
+            assigned={0},
+            highwaters={0: 1},
+        )
+
+    waiting = KafkaSource(consumer=_consumer(), max_idle_seconds=0.05, startup_timeout_seconds=30)
+    assert [e async for e in waiting.events()] == [ev]
+
+    impatient = KafkaSource(consumer=_consumer(), max_idle_seconds=0.05)
+    assert [e async for e in impatient.events()] == []

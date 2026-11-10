@@ -70,6 +70,12 @@ class ProfileSpec(_Strict):
     sessions_per_day: int = Field(ge=1)
     stations: dict[str, int]
     split: SplitRule
+    # Trạm VN lấy toạ độ từ tủ đổi pin VinFast thật (real_sites.py). Chỉ cho trình diễn.
+    real_sites: bool = False
+    # Bản JSONL của cabinet_telemetry (không module nào đọc; mọi nơi đọc parquet). Tắt ở profile
+    # lớn để giảm dung lượng: heartbeat vẫn 1 phút vì detector (gap 120 s) và dashboard
+    # (online 2 phút) giả định chu kỳ này.
+    telemetry_jsonl: bool = True
 
     def seed_for_day(self, day_index: int) -> int:
         """Ngày thuộc tập test dùng `test_seed` (khác seed dev) để tránh overfit."""

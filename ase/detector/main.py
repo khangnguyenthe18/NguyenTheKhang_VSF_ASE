@@ -157,6 +157,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--fields", default="ALL", help="T0 | T0+T1 | T0+T1+T2 | ALL")
     p.add_argument("--source", default="jsonl", choices=["jsonl", "kafka"])
     p.add_argument("--max-idle-seconds", type=float, default=10.0)
+    p.add_argument(
+        "--startup-timeout-seconds",
+        type=float,
+        default=0.0,
+        help="Kafka: chờ message đầu tiên tối đa N giây (publisher nạp profile lớn chậm)",
+    )
     p.add_argument("--notify", action="store_true", help="gửi thật qua Mail + mock Teams")
     p.add_argument("--speed", type=float, default=None, help="replay theo thời gian (1 = thật)")
     p.add_argument("--out", type=Path, default=None)
@@ -166,6 +172,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     settings = get_settings()
+    if settings.dashboard_link_profile is None:
+        # Link "Xem giao dịch" trong mail/card mở đúng profile đang chạy.
+        settings = settings.model_copy(update={"dashboard_link_profile": args.profile})
     k = default_knowledge()
     profile_dir = settings.profile_dir(args.profile)
     notifier = NotifierService(settings=settings) if args.notify else None
@@ -183,6 +192,7 @@ def main(argv: list[str] | None = None) -> None:
         source = KafkaSource(
             settings=settings,
             max_idle_seconds=args.max_idle_seconds,
+            startup_timeout_seconds=args.startup_timeout_seconds,
             clock=sim_clock,
         )
         advance_clock = False

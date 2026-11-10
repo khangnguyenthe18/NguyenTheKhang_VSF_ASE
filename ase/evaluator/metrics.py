@@ -607,13 +607,18 @@ class ScenarioAlerts(BaseModel):
 
 
 class SF8Result(BaseModel):
+    """SF8 = alert P1 / incident P1 thật.
+
+    Incident thật = (scenario, nhóm lỗi) của các phiên P1 (chủ dự án chốt): mỗi nhóm lỗi đi tới
+    1 team khác nhau, vd sự cố quá nhiệt → Battery Ops + Field Ops là 2 incident thật.
+    Số phụ `*_by_scenario` (1 scenario = 1 incident) giữ để so sánh.
+    """
+
     n_alerts: int
     n_real_p1: int
     ratio: float | None
-    # Số phụ (định nghĩa cần mentor chốt): incident thật = (scenario, nhóm lỗi) của các phiên P1,
-    # vì mỗi nhóm lỗi đi tới 1 team khác nhau (vd thermal_overload → Battery Ops + Field Ops).
-    n_real_p1_by_category: int
-    ratio_by_category: float | None
+    n_real_p1_by_scenario: int
+    ratio_by_scenario: float | None
     by_scenario: dict[str, ScenarioAlerts]
     batches_per_team_per_day: dict[str, float]
     n_days: int
@@ -629,8 +634,6 @@ def compute_sf8(data: RunData) -> SF8Result:
         and any(s in data.eval_ids for s in rec.session_ids)
     )
     real_p1 = [r for r in build_real_incidents(data) if r.severity is Severity.P1]
-    n_real_p1 = len(real_p1)
-    ratio = _ratio(n_alerts, n_real_p1)
     by_cat_keys = {
         (r.key, cat)
         for r in real_p1
@@ -661,12 +664,13 @@ def compute_sf8(data: RunData) -> SF8Result:
             days.add(f"{b.window_start:%Y-%m-%d}")
             per_team[b.team] += 1
     n_days = len(days)
+    ratio = _ratio(n_alerts, len(by_cat_keys))
     return SF8Result(
         n_alerts=n_alerts,
-        n_real_p1=n_real_p1,
+        n_real_p1=len(by_cat_keys),
         ratio=ratio,
-        n_real_p1_by_category=len(by_cat_keys),
-        ratio_by_category=_ratio(n_alerts, len(by_cat_keys)),
+        n_real_p1_by_scenario=len(real_p1),
+        ratio_by_scenario=_ratio(n_alerts, len(real_p1)),
         by_scenario=by_scenario,
         batches_per_team_per_day={t: round(c / n_days, 2) for t, c in sorted(per_team.items())}
         if n_days
