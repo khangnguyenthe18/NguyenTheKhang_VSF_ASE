@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import gzip
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -11,6 +12,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from ase.common.config import Settings, get_settings
+from ase.common.models import TxnStatus
 from ase.dashboard.data import (
     NotifierSnapshot,
     ProfileData,
@@ -35,7 +37,6 @@ from ase.dashboard.transactions import (
     INPUT_FMT,
     PAGE_SIZES,
     TxnFilters,
-    TxnStatus,
     build_transactions_page,
 )
 from ase.knowledge.loader import default_knowledge
@@ -139,6 +140,14 @@ def txn_filters(
     )
 
 
+def transactions_or_422[T](build: Callable[[], T]) -> T:
+    """Profile chưa có `swap_transactions.parquet` → 422 kèm hướng dẫn, không phải lỗi 500."""
+    try:
+        return build()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def check_page_size(page_size: int) -> int:
     if page_size not in PAGE_SIZES:
         raise HTTPException(status_code=422, detail=f"page_size phải thuộc {list(PAGE_SIZES)}")
@@ -156,14 +165,17 @@ async def api_transactions(
     page_size: int = PAGE_SIZES[0],
 ) -> TransactionsPageResponse:
     data, profs = resolve_profile_data(request, profile)
-    return build_transactions_page(
-        data,
-        filters=filters,
-        as_of=as_of,
-        country=normalize_country(country),
-        page=page,
-        page_size=check_page_size(page_size),
-        profiles=profs,
+    c_norm, size = normalize_country(country), check_page_size(page_size)
+    return transactions_or_422(
+        lambda: build_transactions_page(
+            data,
+            filters=filters,
+            as_of=as_of,
+            country=c_norm,
+            page=page,
+            page_size=size,
+            profiles=profs,
+        )
     )
 
 

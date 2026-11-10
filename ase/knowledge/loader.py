@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ase.common.models import Category, Severity, Step
+from ase.common.models import AlertLevel, Category, Severity, Step
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent
 
@@ -120,6 +120,94 @@ class ErrorCatalog(_Strict):
             if temperature > float(getattr(self.thresholds, cond.threshold)):
                 return cond.severity
         return spec.severity
+
+
+# --- error_catalog_v1.yaml: bảng mã lỗi chuẩn (CLAUDE.md §6) -----------------------------------
+
+ERROR_TABLE_FILE = "error_catalog_v1.yaml"
+ERROR_TABLE_COLUMNS = ("Mã Lỗi", "Mức Độ Cảnh Báo", "Nhà Sản Xuất", "Loại Tủ", "Tên cảnh báo")
+
+
+class ErrorTableRow(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str
+    level: AlertLevel
+    manufacturer: str
+    cabinet_type: str
+    name: str
+
+
+class ErrorTable(BaseModel):
+    """Bảng mã lỗi BSS của chủ dự án: nguồn duy nhất, CHỈ ĐỌC.
+
+    Vì sao không có trường suy diễn (nhóm lỗi, P1–P3, mô tả): chủ dự án yêu cầu dùng bảng nguyên
+    văn; mọi suy luận của ASE nằm ở cấu hình khác. `rows` đã gộp các dòng giống hệt nhau
+    (bảng gốc lặp 4 dòng ở cuối); `n_source_rows` giữ số dòng của bảng gốc.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rows: tuple[ErrorTableRow, ...]
+    n_source_rows: int
+
+    @model_validator(mode="after")
+    def _one_meaning_per_code_and_type(self) -> ErrorTable:
+        seen: dict[tuple[str, str], ErrorTableRow] = {}
+        for r in self.rows:
+            other = seen.setdefault((r.code, r.cabinet_type), r)
+            if other != r:
+                raise ValueError(f"mã {r.code} / {r.cabinet_type} có hai dòng khác nhau")
+        return self
+
+    @property
+    def codes(self) -> frozenset[str]:
+        return frozenset(r.code for r in self.rows)
+
+    def has(self, code: str) -> bool:
+        return code in self.codes
+
+    def lookup(self, code: str | None, cabinet_type: str | None = None) -> ErrorTableRow | None:
+        """Dòng của `(mã, loại tủ)`. Không biết loại tủ (hoặc loại tủ không có dòng riêng) thì lấy
+        dòng đầu tiên của mã. Mã ngoài bảng chuẩn hoặc không có mã → None."""
+        if not code:
+            return None
+        first: ErrorTableRow | None = None
+        for r in self.rows:
+            if r.code != code:
+                continue
+            if r.cabinet_type == cabinet_type:
+                return r
+            first = first or r
+        return first
+
+
+def load_error_table(directory: Path = KNOWLEDGE_DIR) -> ErrorTable:
+    raw = _load_yaml(ERROR_TABLE_FILE, directory)
+    if not isinstance(raw, dict) or tuple(raw.get("columns", ())) != ERROR_TABLE_COLUMNS:
+        raise ValueError(f"{ERROR_TABLE_FILE}: cột phải đúng {list(ERROR_TABLE_COLUMNS)}")
+    source = raw.get("rows")
+    if not isinstance(source, list) or not source:
+        raise ValueError(f"{ERROR_TABLE_FILE}: thiếu `rows`")
+    rows: dict[ErrorTableRow, None] = {}
+    for i, item in enumerate(source, start=1):
+        if not isinstance(item, list) or len(item) != len(ERROR_TABLE_COLUMNS):
+            raise ValueError(f"{ERROR_TABLE_FILE}: dòng {i} phải có đúng 5 ô")
+        code, level, manufacturer, cabinet_type, name = (str(x) for x in item)
+        row = ErrorTableRow(
+            code=code,
+            level=AlertLevel(level),
+            manufacturer=manufacturer,
+            cabinet_type=cabinet_type,
+            name=name,
+        )
+        rows[row] = None  # dict giữ thứ tự gốc và gộp dòng trùng y hệt
+    return ErrorTable(rows=tuple(rows), n_source_rows=len(source))
+
+
+@lru_cache(maxsize=1)
+def default_error_table() -> ErrorTable:
+    return load_error_table()
 
 
 # --- routing.yaml -----------------------------------------------------------
@@ -299,6 +387,35 @@ class NotifySpec(_Strict):
         return self
 
 
+class ScanSpec(_Strict):
+    """Tham số agent quét danh sách giao dịch và gộp sự cố (khối `scan` của detector.yaml)."""
+
+    interval_minutes: int = Field(gt=0)
+    lookback_minutes: int = Field(gt=0)
+    stuck_after_minutes: int = Field(gt=0)
+    timezone: str
+    max_rows_mail: int = Field(gt=0)
+    baseline_days: int = Field(gt=0)
+    baseline_prior_rate: float = Field(gt=0, lt=1)
+    baseline_prior_txns: int = Field(gt=0)
+    baseline_alpha: float = Field(gt=0, lt=1)
+    wide_min_stations: int = Field(ge=2)
+    wide_min_txns: int = Field(ge=1)
+    station_min_cabinets: int = Field(ge=2)
+    station_min_txns: int = Field(ge=1)
+    cabinet_min_txns: int = Field(ge=1)
+    continue_minutes: dict[Literal["WIDE", "STATION", "CABINET"], int]
+
+    @model_validator(mode="after")
+    def _check(self) -> ScanSpec:
+        ZoneInfo(self.timezone)
+        if self.lookback_minutes < self.interval_minutes + self.stuck_after_minutes:
+            raise ValueError("lookback_minutes phải ≥ interval_minutes + stuck_after_minutes")
+        if set(self.continue_minutes) != {"WIDE", "STATION", "CABINET"}:
+            raise ValueError("continue_minutes phải có đủ WIDE, STATION, CABINET")
+        return self
+
+
 class StreamSpec(_Strict):
     allowed_lateness_seconds: float = Field(default=10.0, ge=0.0)
 
@@ -307,6 +424,7 @@ class DetectorSpec(_Strict):
     correlator: CorrelatorSpec
     classifier: ClassifierSpec
     notify: NotifySpec
+    scan: ScanSpec
     stream: StreamSpec = Field(default_factory=StreamSpec)
     field_tiers: dict[str, list[str]]
     field_presets: dict[str, list[str]]

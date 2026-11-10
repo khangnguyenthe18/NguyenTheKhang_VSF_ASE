@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from email import policy
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -24,6 +25,7 @@ class NotifierConfigError(RuntimeError):
 
 
 SmtpSendCallable = Callable[..., Awaitable[object]]
+_MAIL_POLICY = policy.SMTP.clone(max_line_length=998)
 
 
 def build_mime_message(
@@ -32,7 +34,9 @@ def build_mime_message(
     mail_to: str,
 ) -> EmailMessage:
     """Tạo MIME multipart/alternative chứa cả bản text/plain và text/html."""
-    msg = EmailMessage()
+    # Không gập header: Python gập tiêu đề dài có dấu thành nhiều encoded-word và làm MẤT dấu cách
+    # giữa hai từ ("giao dịch lỗi" → "giao dịchlỗi"). 998 là độ dài dòng tối đa của RFC 5322.
+    msg = EmailMessage(policy=_MAIL_POLICY)
     msg["Subject"] = rendered.subject
     msg["From"] = mail_from
     msg["To"] = mail_to
@@ -215,7 +219,11 @@ class SmtpEmailNotifier:
         try:
             async for attempt in smtp_retrying(sleep=self._sleep):
                 with attempt:
-                    await sender(msg, **send_kwargs)
+                    # Gửi bytes đã dựng sẵn: đưa EmailMessage thì aiosmtplib gập lại header
+                    # (78 cột) và lỗi mất dấu cách trong tiêu đề quay lại.
+                    await sender(
+                        msg.as_bytes(), sender=mail_from, recipients=[mail_to], **send_kwargs
+                    )
         except (aiosmtplib.SMTPConnectError, ConnectionRefusedError, OSError) as exc:
             self._connection_failed = True
             is_conn_refused = (

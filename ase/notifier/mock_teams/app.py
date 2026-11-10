@@ -29,6 +29,7 @@ ACTION_LABELS: dict[str, str] = {
 }
 
 CHANNELS: list[tuple[str, str]] = [
+    ("ops", "OPS"),
     ("it-ops", "IT Ops"),
     ("field-ops", "Field Ops"),
     ("payment-ops", "Payment Ops"),

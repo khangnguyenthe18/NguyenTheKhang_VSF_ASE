@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>{{ subject }}</title></head>
+{% set th = "padding: 8px 10px; text-align: left; font-size: 12px; color: #475569; font-weight: 600; background: #f8fafc; border-bottom: 1px solid #e2e8f0; white-space: nowrap;" %}
+{% set td = "padding: 8px 10px; font-size: 13px; color: #0f172a; border-bottom: 1px solid #f1f5f9; vertical-align: top;" %}
+{% set sub = "color: #64748b; font-size: 12px;" %}
+<body style="margin: 0; padding: 16px; background: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; color: #1f2937; line-height: 1.45;">
+  <table role="presentation" cellpadding="0" cellspacing="0" style="max-width: 980px; width: 100%; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; border-collapse: separate; overflow: hidden;">
+    <tr><td style="background: #1e3a8a; color: #ffffff; padding: 14px 20px;">
+      <div style="font-size: 16px; font-weight: 700;">Quét Danh sách giao dịch đổi pin · {{ team }}</div>
+      <div style="font-size: 13px; opacity: 0.9; margin-top: 2px;">Chu kỳ {{ window }}</div>
+    </td></tr>
+    <tr><td style="padding: 16px 20px 0;">
+      <p style="margin: 0 0 10px;">Dear Team <strong>{{ team }}</strong>,</p>
+      <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+        <td style="padding: 8px 16px; background: #fef2f2; border-radius: 6px;"><div style="font-size: 22px; font-weight: 700; color: #b91c1c;">{{ n_total }}</div><div style="{{ sub }}">giao dịch lỗi mới</div></td>
+        <td style="width: 8px;"></td>
+        <td style="padding: 8px 16px; background: #f5f3ff; border-radius: 6px;"><div style="font-size: 22px; font-weight: 700; color: #6d28d9;">{{ incidents | length }}</div><div style="{{ sub }}">sự cố</div></td>
+        <td style="width: 8px;"></td>
+        <td style="padding: 8px 16px; background: #eff6ff; border-radius: 6px;"><div style="font-size: 22px; font-weight: 700; color: #1d4ed8;">{{ n_scanned }}</div><div style="{{ sub }}">giao dịch đã quét</div></td>
+      </tr></table>
+      <p style="margin: 10px 0 0; font-size: 13px;">Thất bại {{ n_failed }} · kẹt {{ n_stuck }} · lỗi lẻ {{ n_single }}{% if n_returned %} · <strong style="color: #b91c1c;">đã trả pin cũ, chưa nhận pin mới: {{ n_returned }}</strong>{% endif %}{% if n_outside %} · mã ngoài bảng chuẩn: {{ n_outside }}{% endif %}</p>
+    </td></tr>
+    <tr><td style="padding: 16px 20px 0;">
+      <div style="font-size: 14px; font-weight: 700; margin-bottom: 6px;">Theo mã lỗi</div>
+      {% for c in by_code %}<span style="display: inline-block; margin: 2px 4px 2px 0; padding: 3px 9px; background: #f1f5f9; border-radius: 999px; font-size: 12px; color: #334155;">{{ c.label }} <strong>{{ c.n }}</strong></span>{% endfor %}
+    </td></tr>
+    {% if incidents %}
+    <tr><td style="padding: 18px 20px 0;">
+      <div style="font-size: 14px; font-weight: 700; margin-bottom: 6px;">Sự cố</div>
+      <table cellpadding="0" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #e2e8f0;">
+        <tr><th style="{{ th }}">Mức</th><th style="{{ th }}">Sự cố</th><th style="{{ th }}">Phạm vi</th><th style="{{ th }}">Lỗi</th><th style="{{ th }} text-align: right;">Mới / Tổng</th><th style="{{ th }}">Từ</th></tr>
+        {% for i in incidents %}
+        <tr>
+          <td style="{{ td }}"><span style="display: inline-block; padding: 1px 7px; border-radius: 4px; background: {{ i.color }}; color: #ffffff; font-size: 12px; font-weight: 700;">{{ i.level }}</span></td>
+          <td style="{{ td }} white-space: nowrap;"><code>{{ i.incident_id }}</code><div style="{{ sub }}">lần {{ i.revision }}</div></td>
+          <td style="{{ td }}">{{ i.kind_label }} <strong>{{ i.scope }}</strong></td>
+          <td style="{{ td }}">{{ i.groups }}</td>
+          <td style="{{ td }} text-align: right; font-weight: 600;">{{ i.n_new }} / {{ i.n_total }}</td>
+          <td style="{{ td }} white-space: nowrap;">{{ i.first_seen }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </td></tr>
+    {% endif %}
+    <tr><td style="padding: 18px 20px 0;">
+      <div style="font-size: 14px; font-weight: 700; margin-bottom: 6px;">Chi tiết giao dịch ({{ rows | length }}/{{ n_total }} dòng)</div>
+      <table cellpadding="0" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #e2e8f0;">
+        <tr><th style="{{ th }}">Mã giao dịch eMSP</th><th style="{{ th }}">Giờ địa phương trạm</th><th style="{{ th }}">Trạm / Tủ</th><th style="{{ th }}">Lý do lỗi</th><th style="{{ th }}">Trạng thái</th><th style="{{ th }}">Sự cố</th></tr>
+        {% for r in rows %}
+        <tr>
+          <td style="{{ td }}"><a href="{{ r.url }}" style="color: #1d4ed8; font-weight: 600; text-decoration: none; font-family: Consolas, monospace;">{{ r.emsp_txn_id }}</a></td>
+          <td style="{{ td }} white-space: nowrap;">{{ r.local_time }}</td>
+          <td style="{{ td }}">{{ r.station_id }}<div style="{{ sub }}">{{ r.cabinet_id }}{% if r.connector %} · connector {{ r.connector }}{% endif %}</div></td>
+          <td style="{{ td }}">{{ r.error }}</td>
+          <td style="{{ td }}">{{ r.status_label }}{% if r.returned %}<div style="color: #b91c1c; font-size: 12px;">đã trả pin, chưa nhận pin mới</div>{% endif %}</td>
+          <td style="{{ td }} white-space: nowrap;">{{ r.incident_id or "—" }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% if rows | length < n_total %}<p style="{{ sub }}">Còn {{ n_total - (rows | length) }} dòng trong tệp đính kèm <code>{{ csv_filename }}</code>.</p>{% endif %}
+    </td></tr>
+    <tr><td style="padding: 18px 20px;">
+      <a href="{{ dashboard_url }}" style="display: inline-block; padding: 9px 16px; background: #1d4ed8; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px;">Xem giao dịch lỗi trên dashboard →</a>
+      <p style="{{ sub }} margin: 12px 0 0;">Mã lần quét <code>{{ scan_id }}</code> · -- AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.</p>
+    </td></tr>
+  </table>
+</body>
+</html>

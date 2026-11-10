@@ -9,7 +9,7 @@ SPEED ?= 60
 E2E_SPEED ?= 18000
 E2E_PATH_YIELD_MS ?= 25
 
-.PHONY: check lint type test sim detect detect-ablation eval ablation teams dashboard notify-demo mail-up mail-down demo stream-up stream-down stream-demo e2e
+.PHONY: check lint type test sim agent agent-eval detect detect-ablation eval ablation teams dashboard notify-demo mail-up mail-down demo stream-up stream-down stream-demo e2e
 
 check: lint type test
 
@@ -25,6 +25,16 @@ test:
 
 sim:
 	$(UV_RUN) python -m ase.simulator --profile $(PROFILE)
+
+# Agent quét "Danh sách giao dịch đổi pin" 30 phút/lần (docs/OPS_AGENT_PLAN.md). Phát lại bằng
+# SimClock; NOTIFY=1 gửi mail + card cho từng lần quét có lỗi (tối đa MAX_NOTIFY lần quét).
+MAX_NOTIFY ?= 20
+agent:
+	$(UV_RUN) python -m ase.agent --profile $(PROFILE) $(if $(NOTIFY),--notify --max-notify $(MAX_NOTIFY),)
+
+# Đo SF1–SF5, SF7, SF8 của agent (rule-only). PROFILE=eval chỉ đánh giá split test.
+agent-eval: agent
+	$(UV_RUN) python -m ase.evaluator.txn_eval --profile $(PROFILE) $(if $(filter eval,$(PROFILE)),--split test,)
 
 FIELDS ?= ALL
 detect:

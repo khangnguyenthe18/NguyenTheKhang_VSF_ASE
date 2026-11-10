@@ -19,6 +19,7 @@ from ase.dashboard.api import (
     resolve_notifier,
     resolve_profile_data,
     resolve_settings,
+    transactions_or_422,
     txn_filters,
 )
 from ase.dashboard.metrics import (
@@ -85,14 +86,17 @@ async def page_transactions(
 ) -> HTMLResponse:
     """Trang chủ: Danh sách giao dịch đổi pin. Mặc định hiện tất cả giao dịch, mới nhất trước."""
     data, profs = resolve_profile_data(request, profile)
-    payload = build_transactions_page(
-        data,
-        filters=filters,
-        as_of=as_of,
-        country=normalize_country(country),
-        page=page,
-        page_size=check_page_size(page_size),
-        profiles=profs,
+    c_norm, size = normalize_country(country), check_page_size(page_size)
+    payload = transactions_or_422(
+        lambda: build_transactions_page(
+            data,
+            filters=filters,
+            as_of=as_of,
+            country=c_norm,
+            page=page,
+            page_size=size,
+            profiles=profs,
+        )
     )
     return _render(
         "transactions.html.j2",
@@ -114,7 +118,8 @@ async def export_transactions(
     """Xuất dữ liệu: toàn bộ giao dịch theo bộ lọc hiện tại (không phân trang), CSV UTF-8 có BOM."""
     data, _ = resolve_profile_data(request, profile)
     eff_as_of, _ = clamp_as_of(as_of, data.min_time, data.max_time, data.default_as_of)
-    df = query_transactions(data, eff_as_of, filters, normalize_country(country))
+    c_norm = normalize_country(country)
+    df = transactions_or_422(lambda: query_transactions(data, eff_as_of, filters, c_norm))
     filename = f"giao_dich_doi_pin_{data.profile}_{eff_as_of:%Y%m%dT%H%MZ}.csv"
     return Response(
         content=to_csv(df).encode("utf-8"),

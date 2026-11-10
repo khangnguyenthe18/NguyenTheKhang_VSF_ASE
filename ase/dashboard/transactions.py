@@ -1,26 +1,23 @@
 """Danh sách giao dịch đổi pin: bảng 1 dòng/giao dịch theo màn hình hệ thống vận hành thật.
 
-Vì sao dựng từ `swap_sessions` + `swap_events` + telemetry khoang thay vì đọc một bảng có sẵn:
-mock hiện ghi event theo 7 bước, còn màn hình thật là 1 dòng/giao dịch với trạng thái tổng
-(Tạo mới → Đưa pin vào → Hoàn thành / Thất bại). Khi simulator sinh sẵn bảng giao dịch
-(OPS_AGENT_PLAN §3.2 việc 1.3) chỉ cần thay `_build_base`, phần lọc/xuất giữ nguyên.
-
-Trạng thái tính theo `as_of`: phiên chưa kết thúc tại `as_of` là `Tạo mới` (chưa có pin vào)
-hoặc `Đưa pin vào` (pin cũ đã vào, chưa xong). Lọc ngày theo **giờ địa phương của trạm**,
-đúng như giờ hiển thị trên bảng.
+Đọc `swap_transactions.parquet` do simulator sinh (cùng nguồn với agent quét 30 phút) và dùng
+chung `ase.agent.source.view_as_of`, nên dashboard và agent luôn thấy cùng một danh sách tại
+cùng một `as_of`: phiên chưa xong hiện là `Tạo mới` / `Đưa pin vào`. Lọc ngày theo **giờ địa
+phương của trạm**, đúng như giờ hiển thị trên bảng.
 """
 
 from __future__ import annotations
 
 import csv
-import hashlib
 import io
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
+from pathlib import Path
 
 import polars as pl
 
+from ase.agent.source import TRANSACTIONS_FILE, load_transactions, view_as_of
+from ase.common.models import TxnStatus
 from ase.dashboard.data import ProfileData
 from ase.dashboard.metrics import _build_meta
 from ase.dashboard.models import TransactionFiltersView, TransactionRow, TransactionsPageResponse
@@ -29,15 +26,6 @@ from ase.knowledge.loader import Knowledge, default_knowledge
 LOCAL_FMT = "%d/%m/%Y %H:%M:%S"
 INPUT_FMT = "%Y-%m-%dT%H:%M"  # giá trị của <input type="datetime-local">
 PAGE_SIZES = (20, 50, 100)
-SOC_IN_TOLERANCE_S = 10  # telemetry khoang ghi đúng lúc cửa đóng sau khi pin vào
-SOC_OUT_TOLERANCE_S = 300  # telemetry khoang pin mới ghi lúc mở cửa, trước event bước 7
-
-
-class TxnStatus(StrEnum):
-    CREATED = "CREATED"
-    BATTERY_IN = "BATTERY_IN"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
 
 
 STATUS_LABELS: dict[TxnStatus, str] = {
@@ -118,61 +106,36 @@ class TxnFilters:
         )
 
 
-def cabinet_serial(cabinet_id: str) -> str:
-    """S/N tủ dạng `BSS-<14 số>`, tất định theo mã tủ.
-
-    Mock chưa có S/N tủ; giá trị này chỉ để hiển thị/tìm kiếm cho tới khi simulator sinh S/N thật.
-    """
-    digest = hashlib.sha256(cabinet_id.encode()).hexdigest()
-    return f"BSS-{int(digest[:16], 16) % 10**14:014d}"
+_BASE_CACHE: dict[Path, tuple[float, pl.DataFrame]] = {}
 
 
-_BASE_CACHE: dict[tuple[str, float], pl.DataFrame] = {}
+def clear_cache() -> None:
+    _BASE_CACHE.clear()
 
 
 def _base(data: ProfileData) -> pl.DataFrame:
-    key = (str(data.profile_dir), data.manifest_mtime)
-    cached = _BASE_CACHE.get(key)
-    if cached is None:
-        cached = _build_base(data)
-        _BASE_CACHE.clear()  # chỉ giữ profile đang xem: bảng demo lớn
-        _BASE_CACHE[key] = cached
-    return cached
-
-
-def _soc_lookup(
-    data: ProfileData,
-    left: pl.DataFrame,
-    time_col: str,
-    slot_col: str,
-    out_col: str,
-    tolerance_s: int,
-) -> pl.DataFrame:
-    """SOC của pin trong khoang `slot_col` đọc từ telemetry gần nhất trước `time_col`."""
-    tel = (
-        data.cabinet_telemetry.filter(pl.col("slot_id").is_not_null() & pl.col("soc").is_not_null())
-        .select(
-            pl.col("cabinet_id"),
-            pl.col("slot_id").alias(slot_col),
-            pl.col("heartbeat_at").alias(time_col),
-            pl.col("soc").alias(out_col),
+    """Danh sách giao dịch (trạng thái cuối) kèm giờ địa phương; cache theo mtime của file."""
+    path = data.profile_dir / TRANSACTIONS_FILE
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Chưa có {TRANSACTIONS_FILE} cho profile '{data.profile}'. "
+            f"Chạy `make sim PROFILE={data.profile}`."
         )
-        .sort(time_col)
-    )
-    probe = left.filter(pl.col(time_col).is_not_null() & pl.col(slot_col).is_not_null()).select(
-        "session_id", "cabinet_id", slot_col, time_col
-    )
-    if probe.height == 0 or tel.height == 0:
-        return left.with_columns(pl.lit(None, dtype=pl.Float64).alias(out_col))
-    found = probe.sort(time_col).join_asof(
-        tel,
-        on=time_col,
-        by=["cabinet_id", slot_col],
-        strategy="backward",
-        tolerance=f"{tolerance_s}s",
-        check_sortedness=False,  # cả hai bảng đã sort theo thời gian ở trên
-    )
-    return left.join(found.select("session_id", out_col), on="session_id", how="left")
+    mtime = path.stat().st_mtime
+    cached = _BASE_CACHE.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+    df = load_transactions(data.profile_dir)
+    for src, out in (
+        ("started_at", "started_local_dt"),
+        ("battery_in_at", "battery_in_local_dt"),
+        ("battery_out_at", "battery_out_local_dt"),
+    ):
+        df = _to_local_naive(df, src, out)
+    df = df.sort(["started_at", "emsp_txn_id"], descending=True)
+    _BASE_CACHE.clear()  # chỉ giữ profile đang xem: bảng demo lớn
+    _BASE_CACHE[path] = (mtime, df)
+    return df
 
 
 def _to_local_naive(df: pl.DataFrame, col: str, out: str) -> pl.DataFrame:
@@ -187,66 +150,6 @@ def _to_local_naive(df: pl.DataFrame, col: str, out: str) -> pl.DataFrame:
     return df.with_columns(expr.alias(out))
 
 
-def _build_base(data: ProfileData) -> pl.DataFrame:
-    sess = data.swap_sessions.join(
-        data.stations.select("station_id", "timezone", "country"), on="station_id", how="left"
-    )
-    ev = data.swap_events
-    ok = ev.filter(pl.col("status") == "OK")
-    bat_in = (
-        ok.filter(pl.col("step") == "6_return_battery")
-        .group_by("session_id")
-        .agg(pl.col("occurred_at").min().alias("battery_in_at"))
-    )
-    bat_out = (
-        ok.filter(pl.col("step") == "7_receive_battery")
-        .group_by("session_id")
-        .agg(pl.col("occurred_at").min().alias("battery_out_at"))
-    )
-    first_fail = (
-        ev.filter(pl.col("status").is_in(["FAILED", "TIMEOUT"]))
-        .sort("occurred_at")
-        .group_by("session_id", maintain_order=True)
-        .agg(pl.col("error_code").first())
-    )
-    soh = data.batteries.select("battery_id", "soh")
-    df = (
-        sess.join(bat_in, on="session_id", how="left")
-        .join(bat_out, on="session_id", how="left")
-        .join(first_fail, on="session_id", how="left")
-        .join(
-            soh.rename({"battery_id": "battery_in_id", "soh": "soh_in"}),
-            on="battery_in_id",
-            how="left",
-        )
-        .join(
-            soh.rename({"battery_id": "battery_out_id", "soh": "soh_out"}),
-            on="battery_out_id",
-            how="left",
-        )
-    )
-    df = _soc_lookup(data, df, "battery_in_at", "slot_in", "soc_in", SOC_IN_TOLERANCE_S)
-    df = _soc_lookup(data, df, "battery_out_at", "slot_out", "soc_out", SOC_OUT_TOLERANCE_S)
-
-    serials = {c: cabinet_serial(c) for c in df["cabinet_id"].unique().drop_nulls().to_list()}
-    df = df.sort(["started_at", "session_id"]).with_columns(
-        pl.col("cabinet_id").replace_strict(serials, default=None).alias("cabinet_serial"),
-        pl.col("session_id").alias("emsp_txn_id"),
-        # Mã giao dịch trên tủ: số tăng dần theo từng tủ (mock chưa có mã này)
-        pl.when(pl.col("cabinet_id").is_not_null())
-        .then((pl.int_range(pl.len()).over("cabinet_id") + 1).cast(pl.String))
-        .otherwise(None)
-        .alias("cabinet_txn_id"),
-    )
-    for src, out in (
-        ("started_at", "started_local_dt"),
-        ("battery_in_at", "battery_in_local_dt"),
-        ("battery_out_at", "battery_out_local_dt"),
-    ):
-        df = _to_local_naive(df, src, out)
-    return df.sort(["started_at", "session_id"], descending=True)
-
-
 def _contains(col: str, needle: str) -> pl.Expr:
     return pl.col(col).fill_null("").str.to_lowercase().str.contains(needle.lower(), literal=True)
 
@@ -255,39 +158,20 @@ def query_transactions(
     data: ProfileData, as_of: datetime, filters: TxnFilters, country: str | None = None
 ) -> pl.DataFrame:
     """Các giao dịch đã bắt đầu tại `as_of`, đã lọc, mới nhất trước, kèm cột hiển thị."""
-    df = _base(data).filter(pl.col("started_at") <= as_of)
+    df = _base(data)
     if country:
         df = df.filter(pl.col("country") == country)
-
-    done = pl.col("ended_at").is_not_null() & (pl.col("ended_at") <= as_of)
-    status = (
-        pl.when(done & (pl.col("final_status") == "COMPLETED"))
-        .then(pl.lit(TxnStatus.COMPLETED.value))
-        .when(done)
-        .then(pl.lit(TxnStatus.FAILED.value))
-        .when(pl.col("battery_in_at") <= as_of)
-        .then(pl.lit(TxnStatus.BATTERY_IN.value))
-        .otherwise(pl.lit(TxnStatus.CREATED.value))
-    )
-    visible_at = pl.col("battery_in_at") <= as_of
-    out_at = pl.col("battery_out_at") <= as_of
-    df = df.with_columns(status.alias("status")).with_columns(
-        pl.when(pl.col("status") == TxnStatus.FAILED.value)
-        .then(pl.col("error_code"))
-        .otherwise(None)
-        .alias("error_code"),
-        pl.when(visible_at)
+    df = view_as_of(df, as_of)
+    # Giờ pin vào/ra chỉ hiện khi đã xảy ra tại `as_of` (view_as_of đã che cột UTC tương ứng)
+    df = df.with_columns(
+        pl.when(pl.col("battery_in_at").is_not_null())
         .then(pl.col("battery_in_local_dt"))
         .otherwise(None)
         .alias("battery_in_local_dt"),
-        pl.when(out_at)
+        pl.when(pl.col("battery_out_at").is_not_null())
         .then(pl.col("battery_out_local_dt"))
         .otherwise(None)
         .alias("battery_out_local_dt"),
-        pl.when(visible_at).then(pl.col("soc_in")).otherwise(None).alias("soc_in"),
-        pl.when(out_at).then(pl.col("battery_out_id")).otherwise(None).alias("battery_out_id"),
-        pl.when(out_at).then(pl.col("soh_out")).otherwise(None).alias("soh_out"),
-        pl.when(out_at).then(pl.col("soc_out")).otherwise(None).alias("soc_out"),
     )
 
     f = filters

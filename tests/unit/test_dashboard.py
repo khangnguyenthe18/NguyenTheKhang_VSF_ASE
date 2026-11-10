@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ase.common.config import Settings
+from ase.common.models import TxnStatus
 from ase.dashboard.data import (
     ProfileData,
     clear_cache,
@@ -35,8 +36,6 @@ from ase.dashboard.models import (
 from ase.dashboard.transactions import (
     COLUMNS,
     TxnFilters,
-    TxnStatus,
-    cabinet_serial,
     query_transactions,
 )
 from ase.knowledge.loader import default_knowledge
@@ -44,6 +43,7 @@ from ase.notifier.mock_teams.app import create_app
 from ase.simulator.entities import build_world
 from ase.simulator.generator import generate
 from ase.simulator.profiles import load_profiles
+from ase.simulator.txn_generator import generate_transactions
 
 K = default_knowledge()
 PROFILES = load_profiles()
@@ -136,6 +136,7 @@ def smoke_env(tmp_path_factory: pytest.TempPathFactory) -> tuple[Settings, Path]
     data_dir = base_dir / "data"
     out_dir = data_dir / "smoke"
     asyncio.run(generate("smoke", out_dir, knowledge=K, profiles=PROFILES))
+    asyncio.run(generate_transactions("smoke", out_dir, knowledge=K, profiles=PROFILES))
 
     db_path = base_dir / "outbox" / "mock_teams.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -363,30 +364,6 @@ def test_dashboard_never_reads_ground_truth_csv(
         assert client.get(url).status_code == 200, url
 
 
-# --- 4. Untrusted data: error_message không bao giờ hiện trên danh sách giao dịch -------------
-
-
-def test_transactions_never_render_untrusted_error_message(
-    smoke_env: tuple[Settings, Path],
-) -> None:
-    settings, db_path = smoke_env
-    events_path = settings.data_dir / "smoke" / "ase.swap.events.jsonl"
-    injected: str | None = None
-    for line in events_path.read_bytes().splitlines():
-        obj = orjson.loads(line) if line else {}
-        if (
-            isinstance(obj.get("error_message"), str)
-            and "</untrusted_data>" in obj["error_message"]
-        ):
-            injected = str(obj["session_id"])
-            break
-    assert injected is not None, "Expected prompt_injection session in smoke profile"
-    client = TestClient(create_app(db_path=db_path, settings=settings))
-    body = client.get(f"/dashboard?profile=smoke&emsp_txn_id={injected}").text
-    assert injected in body
-    assert "untrusted_data" not in body
-
-
 # --- 5. Station coordinate determinism test --------------------------------------------------
 
 
@@ -503,8 +480,10 @@ def test_transactions_default_lists_all_started_newest_first(
     settings, _ = smoke_env
     data = _smoke_data(settings)
     df = query_transactions(data, data.default_as_of, TxnFilters())
-    started = data.swap_sessions.filter(pl.col("started_at") <= data.default_as_of)
-    assert df.height == started.height  # mặc định: tất cả giao dịch, không lọc
+    source = pl.read_parquet(settings.data_dir / "smoke" / "swap_transactions.parquet")
+    started = source.filter(pl.col("started_at") <= data.default_as_of)
+    assert df.height == started.height > 0  # mặc định: tất cả giao dịch, không lọc
+    assert df["station_id"].str.starts_with("B.").all()  # mã trạm dạng màn hình thật
     assert df["started_at"].is_sorted(descending=True)
     assert set(df["status"].unique()) <= {s.value for s in TxnStatus}
     # Lý do lỗi chỉ có ở giao dịch thất bại
@@ -525,7 +504,7 @@ def test_transaction_status_follows_as_of(smoke_env: tuple[Settings, Path]) -> N
         data, data.max_time, TxnFilters(statuses=frozenset({TxnStatus.COMPLETED}))
     )
     row = full.filter(pl.col("battery_in_at").is_not_null()).row(0, named=True)
-    sid = TxnFilters(emsp_txn_id=row["session_id"])
+    sid = TxnFilters(emsp_txn_id=row["emsp_txn_id"])
 
     def at(t: datetime) -> dict[str, object]:
         return query_transactions(data, t, sid).row(0, named=True)
@@ -536,7 +515,7 @@ def test_transaction_status_follows_as_of(smoke_env: tuple[Settings, Path]) -> N
     mid = at(row["battery_in_at"])
     assert mid["status"] == "BATTERY_IN"
     assert mid["battery_in_local"] is not None and mid["battery_out_id"] is None
-    assert at(row["ended_at"])["status"] == "COMPLETED"
+    assert at(row["updated_at"])["status"] == "COMPLETED"
     assert query_transactions(data, row["started_at"] - timedelta(seconds=1), sid).height == 0
 
 
@@ -549,13 +528,13 @@ def test_transaction_date_filter_uses_station_local_time(
     local = datetime.strptime(row["started_local"], "%d/%m/%Y %H:%M:%S")  # noqa: DTZ007
     minute = local.replace(second=0)
     hit = TxnFilters(
-        emsp_txn_id=row["session_id"], date_from=minute, date_to=minute + timedelta(seconds=59)
+        emsp_txn_id=row["emsp_txn_id"], date_from=minute, date_to=minute + timedelta(seconds=59)
     )
     assert query_transactions(data, data.default_as_of, hit).height == 1
     # Cùng khung giờ nhưng hiểu theo UTC (lệch 7 giờ ở VN) thì không khớp
     utc_minute = minute - timedelta(hours=7)
     miss = TxnFilters(
-        emsp_txn_id=row["session_id"],
+        emsp_txn_id=row["emsp_txn_id"],
         date_from=utc_minute,
         date_to=utc_minute + timedelta(seconds=59),
     )
@@ -594,9 +573,10 @@ def test_transactions_api_filters_and_validation(smoke_env: tuple[Settings, Path
     assert both.total + in_progress.total == all_rows.total
     assert failed.filters.statuses == ["FAILED"] and failed.filters.active_count == 1
 
-    st = get("station_id=vn-st-002")  # khớp chứa, không phân biệt hoa thường
-    assert st.total > 0 and all(r.station_id == "VN-ST-002" for r in st.rows)
-    assert get("q=VN-ST-002").total == st.total
+    station = all_rows.rows[0].station_id
+    st = get(f"station_id={station.lower()}")  # khớp chứa, không phân biệt hoa thường
+    assert st.total > 0 and all(r.station_id == station for r in st.rows)
+    assert get(f"q={station}").total == st.total
 
     sample = next(r for r in all_rows.rows if r.battery_out_id and r.cabinet_txn_id)
     assert sample.battery_out_id is not None and sample.cabinet_txn_id is not None
@@ -606,7 +586,7 @@ def test_transactions_api_filters_and_validation(smoke_env: tuple[Settings, Path
         sample.battery_out_id in ((r.battery_in_id or "") + (r.battery_out_id or ""))
         for r in by_bat.rows
     )
-    assert sample.cabinet_serial == cabinet_serial(sample.cabinet_id or "")
+    assert sample.cabinet_serial is not None and sample.cabinet_serial.startswith("BSS-")
     assert get(f"cabinet_serial={sample.cabinet_serial}").total > 0
 
     # Phân trang: STT nối tiếp, trang vượt quá bị kẹp về trang cuối

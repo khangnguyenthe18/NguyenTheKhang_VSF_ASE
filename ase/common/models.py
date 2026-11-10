@@ -48,6 +48,22 @@ class Severity(StrEnum):
     P3 = "P3"
 
 
+class AlertLevel(StrEnum):
+    """Cột "Mức Độ Cảnh Báo" của bảng mã lỗi chuẩn (CLAUDE.md §6). Thay P1/P2/P3 ở hướng mới."""
+
+    HIGH = "High"
+    LOW = "Low"
+
+
+class TxnStatus(StrEnum):
+    """Trạng thái giao dịch như màn hình thật: Tạo mới → Đưa pin vào → Hoàn thành / Thất bại."""
+
+    CREATED = "CREATED"
+    BATTERY_IN = "BATTERY_IN"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 EventStatus = Literal["OK", "FAILED", "TIMEOUT", "PENDING"]
 
 
@@ -169,6 +185,48 @@ class TeamBatch(BaseModel):
     _aware = field_validator("window_start", "window_end")(_require_aware)
 
 
+class SwapTransaction(BaseModel):
+    """1 dòng của "Danh sách giao dịch đổi pin" (nguồn dữ liệu của agent quét 30 phút).
+
+    18 cột đầu đúng như màn hình hệ thống vận hành thật. Các trường thêm:
+    - `cabinet_type`: bảng mã lỗi chuẩn tra theo `(mã, loại tủ)`; màn hình không có cột này nên
+      tuỳ chọn (thiếu thì tra theo mã).
+    - `country`, `timezone`: hiển thị giờ địa phương của trạm và báo cáo theo từng hệ thống BSS.
+    - `updated_at`: lần đổi trạng thái gần nhất, để tính giao dịch kẹt.
+    - `user_id` (hash): chỉ dùng cho danh sách khách bị ảnh hưởng.
+    Mọi thời gian là UTC, tz-aware.
+    """
+
+    station_id: str
+    cabinet_id: str | None = None
+    cabinet_serial: str | None = None
+    emsp_txn_id: str  # khoá idempotency của giao dịch
+    cabinet_txn_id: str | None = None
+    started_at: datetime  # "Ngày thực hiện"
+    status: TxnStatus
+    error_code: str | None = None  # "Lý do lỗi": giữ nguyên mã, kể cả mã ngoài bảng chuẩn
+    battery_in_id: str | None = None  # S/N pin cũ
+    battery_out_id: str | None = None  # S/N pin mới
+    slot_in: str | None = None  # Connector ID (pin cũ)
+    soh_in: float | None = Field(default=None, ge=0, le=100)
+    soc_in: float | None = Field(default=None, ge=0, le=100)
+    slot_out: str | None = None  # Connector ID (pin mới)
+    soh_out: float | None = Field(default=None, ge=0, le=100)
+    soc_out: float | None = Field(default=None, ge=0, le=100)
+    battery_in_at: datetime | None = None
+    battery_out_at: datetime | None = None
+
+    cabinet_type: str | None = None
+    country: str
+    timezone: str  # IANA
+    updated_at: datetime
+    user_id: str | None = None
+
+    _aware = field_validator("started_at", "battery_in_at", "battery_out_at", "updated_at")(
+        _require_aware
+    )
+
+
 class OpenPoint(BaseModel):
     id: str  # ổn định qua các kỳ
     group: Literal["OPERATION", "AI_SYSTEM"]
@@ -288,6 +346,23 @@ class CabinetTelemetry(_Table):
     hw_error_code: str | None = None
 
     _aware = field_validator("heartbeat_at")(_require_aware)
+
+
+class TxnGroundTruthRow(_Table):
+    """Ground truth 1 dòng/giao dịch của mock danh sách giao dịch. Agent KHÔNG được đọc file này."""
+
+    emsp_txn_id: str
+    is_failure: bool
+    kind: str | None = None  # FAILED | STUCK
+    error_code: str | None = None
+    level: AlertLevel | None = None
+    scenario: str | None = None  # None = lỗi nền hoặc giao dịch bình thường
+    scenario_instance_id: str | None = None
+    failure_at: datetime | None = None  # FAILED: lúc báo lỗi; STUCK: lần đổi trạng thái cuối
+    country: str
+    split: str
+
+    _aware = field_validator("failure_at")(_require_aware)
 
 
 class GroundTruthRow(_Table):

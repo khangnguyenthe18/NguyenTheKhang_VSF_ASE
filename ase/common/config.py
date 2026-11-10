@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     smtp_tls: Literal["none", "starttls", "ssl"] = "none"
     smtp_user: str | None = None
     smtp_password: SecretStr | None = None
-    mail_from: str | None = "ase-alerts@ase.local"
+    mail_from: str | None = "ase-agent@ase.local"
     mail_to: str | None = "ops@ase.local"
     teams_url: str = "http://localhost:8000"
     # Trang xem card mock Teams ở "/" (tạm tắt theo chủ dự án: "/" chuyển thẳng vào dashboard).
@@ -118,7 +118,7 @@ class Settings(BaseSettings):
             defaults = {
                 "smtp_host": "localhost",
                 "smtp_tls": "none",
-                "mail_from": "ase-alerts@ase.local",
+                "mail_from": "ase-agent@ase.local",
                 "mail_to": "ops@ase.local",
                 "notify_mode": "live",
                 "kafka_bootstrap": "localhost:19092",

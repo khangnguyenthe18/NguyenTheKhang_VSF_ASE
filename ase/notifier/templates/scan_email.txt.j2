@@ -1,0 +1,37 @@
+Dear Team {{ team }},
+
+Kết quả quét Danh sách giao dịch đổi pin, chu kỳ {{ window }}:
+
+• Giao dịch đã quét   : {{ n_scanned }}
+• Giao dịch lỗi mới   : {{ n_total }} (Thất bại {{ n_failed }}, kẹt {{ n_stuck }})
+• Sự cố               : {{ incidents | length }}{% if n_new_incidents %} (mới {{ n_new_incidents }}){% endif %}
+
+• Lỗi lẻ (ngoài sự cố) : {{ n_single }}
+{% if n_returned %}
+• Đã trả pin cũ, chưa nhận pin mới: {{ n_returned }} giao dịch
+{% endif %}
+{% if n_outside %}
+• Mã ngoài bảng chuẩn (cần người kiểm tra): {{ n_outside }} giao dịch
+{% endif %}
+
+Theo mã lỗi:
+{% for c in by_code %}
+  - {{ c.label }}: {{ c.n }}
+{% endfor %}
+{% if incidents %}
+
+Sự cố:
+{% for i in incidents %}
+  - [{{ i.level }}] {{ i.incident_id }} (lần {{ i.revision }}) · {{ i.kind_label }} {{ i.scope }} · {{ i.groups }} · {{ i.n_new }} giao dịch mới / {{ i.n_total }} tổng · từ {{ i.first_seen }}
+{% endfor %}
+{% endif %}
+
+Chi tiết giao dịch ({{ rows | length }}/{{ n_total }} dòng, đủ trong tệp {{ csv_filename }}):
+{% for r in rows %}
+  - {{ r.emsp_txn_id }} · {{ r.local_time }} · {{ r.station_id }} / {{ r.cabinet_id }}{% if r.connector %} / connector {{ r.connector }}{% endif %} · {{ r.error }} · {{ r.status_label }}{% if r.returned %} · đã trả pin, chưa nhận pin mới{% endif %}{% if r.incident_id %} · {{ r.incident_id }}{% endif %}
+
+{% endfor %}
+
+Xem trên dashboard: {{ dashboard_url }}
+Mã lần quét: {{ scan_id }}
+-- AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.

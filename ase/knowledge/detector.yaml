@@ -34,6 +34,27 @@ notify:
   daily_report_local_time: "18:00"
   daily_report_timezone: "Asia/Ho_Chi_Minh"
 
+# Agent quét "Danh sách giao dịch đổi pin" (CLAUDE.md §8, docs/OPS_AGENT_PLAN.md).
+scan:
+  interval_minutes: 30          # mốc tròn :00 / :30 — mỗi lần quét tối đa 1 thông báo (tránh spam OPS)
+  lookback_minutes: 60          # mỗi lần quét nhìn lại các giao dịch bắt đầu trong khoảng này
+  stuck_after_minutes: 10       # Tạo mới / Đưa pin vào đứng yên quá ngưỡng này = giao dịch kẹt
+  timezone: "Asia/Ho_Chi_Minh"  # giờ của đội OPS trên tiêu đề thông báo
+  max_rows_mail: 200            # số dòng chi tiết tối đa trong thân mail (CSV đính kèm luôn đủ)
+  # Gộp sự cố theo mẫu phân bố (bảng mã chuẩn không có nhóm lỗi). Một mã chỉ thành sự cố khi số
+  # lỗi trong lần quét VƯỢT MỨC NỀN của chính mã đó (kiểm định Poisson), hoặc mã có mức High.
+  baseline_days: 7              # mức nền = tỷ lệ lỗi của từng mã trong N ngày gần nhất
+  baseline_prior_rate: 0.005    # tỷ lệ giả định khi chưa đủ lịch sử ...
+  baseline_prior_txns: 1000     # ... với trọng số tương đương N giao dịch
+  baseline_alpha: 0.001         # ngưỡng xác suất "do ngẫu nhiên" để coi là bất thường
+  wide_min_stations: 3          # cùng một mã ở ≥ N trạm ...
+  wide_min_txns: 5              # ... và ≥ N giao dịch trong một lần quét → sự cố lan rộng
+  station_min_cabinets: 2       # lỗi đáng chú ý ở ≥ N tủ của một trạm ...
+  station_min_txns: 3           # ... và ≥ N giao dịch → sự cố mức trạm
+  cabinet_min_txns: 2           # ≥ N giao dịch cùng mã tại một tủ và vượt nền → sự cố mức tủ
+  # Lỗi mới nối vào sự cố đang mở nếu lần gần nhất của sự cố còn trong khoảng này (phút).
+  continue_minutes: {WIDE: 60, STATION: 120, CABINET: 1440}
+
 stream:
   allowed_lateness_seconds: 10
 

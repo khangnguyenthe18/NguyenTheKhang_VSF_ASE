@@ -1,0 +1,90 @@
+# Kịch bản mock cho "Danh sách giao dịch đổi pin" (docs/OPS_AGENT_PLAN.md, việc 1.3).
+# Mọi `code` PHẢI có trong bảng mã lỗi chuẩn (ase/knowledge/error_catalog_v1.yaml); generator kiểm tra.
+# `after_battery_in`: lỗi xảy ra sau khi pin cũ đã vào tủ (dòng có S/N pin cũ, không có pin mới).
+#   Đây là giả định của MOCK về thời điểm lỗi, không phải thuộc tính của bảng mã chuẩn.
+# Thời lượng kịch bản mức tủ để 2–3 giờ vì một tủ chỉ có vài giao dịch mỗi giờ (cần đủ case).
+# TẬP KỊCH BẢN ĐÃ KHOÁ trước khi viết rule của agent: không chỉnh để rule đạt điểm.
+
+timing:
+  battery_in_seconds: [15, 60]     # Tạo mới → Đưa pin vào
+  battery_out_seconds: [20, 50]    # Đưa pin vào → Hoàn thành
+  fail_seconds: [5, 40]            # từ trạng thái trước tới lúc báo Thất bại
+
+# Lỗi nền rải rác (chỉ mã mức Low).
+background:
+  fail_rate: 0.04
+  failures:
+    - {code: D6031, weight: 50}                          # BatteryInTimeout
+    - {code: D6033, weight: 15}                          # InvalidBattery
+    - {code: D6034, weight: 15, after_battery_in: true}  # SOH is not qualified
+    - {code: D6037, weight: 10}                          # Payment Callback Failed
+    - {code: D6036, weight: 10}                          # Payment Callback Timeout
+
+# scope: cabinet | station | country | global.  effect: fail | stuck_created | stuck_battery_in | slow.
+# sequence: true → các mã lần lượt theo thời gian (chia đều thời lượng).
+# occurrences: số lần lặp theo profile; profile có baseline + test thì xen kẽ hai tập.
+scenarios:
+  - name: slot_lock_jam            # khoang kẹt khoá nhiều ngày tại một tủ
+    scope: cabinet
+    duration_minutes: 2880
+    fail_prob: 0.35
+    codes: [{code: B6000}, {code: C6029, after_battery_in: true}]
+    occurrences: {smoke: 0, dev: 2, eval: 4, demo: 2}
+  - name: grid_power_loss          # mất điện lưới tại một trạm
+    scope: station
+    duration_minutes: 45
+    fail_prob: 0.9
+    sequence: true
+    codes: [{code: A0122}, {code: B6025}]
+    occurrences: {smoke: 1, dev: 2, eval: 4, demo: 2}
+  - name: cabinet_overheat_smoke   # tủ quá nhiệt rồi báo khói
+    scope: cabinet
+    duration_minutes: 120
+    fail_prob: 0.9
+    sequence: true
+    codes: [{code: A6009}, {code: A0110}]
+    occurrences: {smoke: 1, dev: 2, eval: 4, demo: 2}
+  - name: wallet_down_ph           # ví điện tử PH ngừng: callback thanh toán lỗi, chỉ PH
+    scope: country
+    country: PH
+    duration_minutes: 25
+    fail_prob: 0.85
+    codes: [{code: D6036, weight: 2}, {code: D6037, weight: 1}]
+    occurrences: {smoke: 0, dev: 2, eval: 4, demo: 2}
+  - name: txn_upload_failure       # tủ không gửi được giao dịch lên hệ thống, mọi nước
+    scope: global
+    duration_minutes: 40
+    fail_prob: 0.5
+    codes: [{code: B0207}]
+    occurrences: {smoke: 0, dev: 2, eval: 4, demo: 2}
+  - name: battery_lost             # mất pin trong khoang
+    scope: cabinet
+    duration_minutes: 120
+    fail_prob: 0.6
+    codes: [{code: C6100, after_battery_in: true}]
+    occurrences: {smoke: 1, dev: 2, eval: 4, demo: 2}
+  - name: returned_not_received    # khách đã trả pin nhưng không nhận được pin mới
+    scope: cabinet
+    duration_minutes: 120
+    fail_prob: 0.7
+    codes: [{code: D6038, after_battery_in: true}]
+    occurrences: {smoke: 1, dev: 2, eval: 4, demo: 2}
+  - name: stuck_battery_in         # giao dịch kẹt ở "Đưa pin vào", không có mã lỗi
+    scope: cabinet
+    duration_minutes: 120
+    fail_prob: 0.7
+    effect: stuck_battery_in
+    occurrences: {smoke: 1, dev: 2, eval: 4, demo: 2}
+  - name: stuck_created            # giao dịch kẹt ở "Tạo mới", không có mã lỗi
+    scope: station
+    duration_minutes: 60
+    fail_prob: 0.5
+    effect: stuck_created
+    occurrences: {smoke: 0, dev: 2, eval: 4, demo: 2}
+  - name: slow_but_completed       # BẪY: khách thao tác chậm nhưng giao dịch vẫn hoàn thành
+    scope: cabinet
+    duration_minutes: 180
+    fail_prob: 0.6
+    effect: slow
+    slow_seconds: [240, 540]
+    occurrences: {smoke: 1, dev: 2, eval: 4, demo: 2}
