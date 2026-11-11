@@ -2,7 +2,7 @@
 
 Kèm `PAIR_CONTRACT_v0.1.md`. Mục đích: để log của đối tác dùng **cùng mã trạm / tủ / connector / giao dịch và cùng thời gian** với danh sách giao dịch. File này chỉ mô tả định dạng; kịch bản mock của mỗi bên do bên đó tự làm.
 
-**File:** `data/<profile>/swap_transactions.parquet` (bản JSONL: `swap_transactions.jsonl`, mỗi dòng 1 giao dịch), sinh bằng `make sim PROFILE=<profile>`. Profile dùng chung: **`pair`** (VN, 650 điểm, 30 ngày từ 05/10/2026, seed 2042, tập test seed 9142; mã điểm đã che; thêm 2 kịch bản `traffic_drop`, `repeated_request`). Mọi thời gian là UTC (ISO-8601); giờ hiển thị theo `timezone` của trạm.
+**File:** `data/<profile>/swap_transactions.parquet` (bản JSONL: `swap_transactions.jsonl`, mỗi dòng 1 giao dịch), sinh bằng `make sim PROFILE=<profile>`. Profile dùng chung: **`pair`** (VN, 650 điểm, 30 ngày từ 05/10/2026, seed 2042, tập test seed 9142; mã điểm đã che; thêm 3 kịch bản có dấu hiệu log `deploy_degradation`, `traffic_drop`, `repeated_request`). Mọi thời gian trong JSONL/CSV là UTC dạng `…Z`. Mọi thời gian là UTC (ISO-8601); giờ hiển thị theo `timezone` của trạm.
 
 | Cột | Kiểu | Ví dụ | Ghi chú |
 |---|---|---|---|
@@ -31,8 +31,9 @@ Kèm `PAIR_CONTRACT_v0.1.md`. Mục đích: để log của đối tác dùng **
 |---|---|
 | `scenario_instance_id` | vd `traffic_drop#2`; khớp cột cùng tên trong `txn_ground_truth.csv` |
 | `scenario`, `scope`, `effect` | Kịch bản; phạm vi `cabinet` / `station` / `province` / `country` / `global`; tác động (`fail`, `stuck_*`, `slow`, `drop`, `repeat`) |
-| `is_failure` | `false` với bẫy (`slow`) và sụt traffic (`drop`: không có giao dịch lỗi) |
-| `start`, `end` | Thời gian UTC của lần lặp |
+| `is_failure` | `false` với bẫy (`slow`) và sụt traffic (`drop`: không có giao dịch lỗi). Chấm điểm dùng cột này: giao dịch **kẹt** (không có trạng thái Thất bại) vẫn là lỗi |
+| `signal_start` | Lúc dấu hiệu trên log bắt đầu (chỉ 3 kịch bản có log; `deploy_degradation` sớm hơn `start` 20–60 phút); trống với kịch bản khác |
+| `start`, `end` | Thời gian UTC của lần lặp trên danh sách giao dịch |
 | `station_id`, `cabinet_id`, `province`, `country` | Phạm vi (mã vận hành, đã che); trống nếu không áp dụng |
 | `split` | `baseline` / `test` |
 | `n_affected`, `n_failures` | Số giao dịch thuộc lần lặp (`drop`: số giao dịch bị mất) / số giao dịch lỗi |

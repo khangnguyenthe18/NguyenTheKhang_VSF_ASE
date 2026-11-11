@@ -98,6 +98,7 @@ scenarios:
     duration_minutes: 180
     fail_prob: 0.6                 # effect=drop: 60% giao dịch trong khung giờ không xảy ra
     effect: drop
+    log_lead_minutes: [0, 0]       # dấu hiệu log xuất hiện cùng lúc với giao dịch
     occurrences: {pair: 6}
   - name: repeated_request         # một khách tạo giao dịch lặp lại liên tục tại một tủ
     scope: cabinet
@@ -107,4 +108,12 @@ scenarios:
     repeat_count: [5, 9]
     repeat_gap_seconds: [60, 180]
     codes: [{code: D6031}]         # BatteryInTimeout: tạo giao dịch nhưng không đưa pin vào
+    log_lead_minutes: [0, 0]       # dấu hiệu log xuất hiện cùng lúc với giao dịch
     occurrences: {pair: 6}
+  - name: deploy_degradation       # deploy lỗi dịch vụ nhận giao dịch: latency tăng dần trên log
+    scope: global                  # trước, rồi tủ không gửi được giao dịch lên hệ thống
+    duration_minutes: 60
+    fail_prob: 0.5
+    codes: [{code: B0207}]         # TxnUploadFailure
+    log_lead_minutes: [20, 60]     # latency trên log tăng từ 20–60 phút trước giao dịch lỗi đầu tiên
+    occurrences: {pair: 8}

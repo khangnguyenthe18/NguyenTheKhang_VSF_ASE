@@ -593,5 +593,9 @@ def test_pair_profile_has_partner_scenarios_and_instance_answer_key() -> None:
     assert {"scenario_instance_id", "start", "end", "station_id", "province", "split"} <= set(
         frame.columns
     )
+    deploy = frame.filter(pl.col("scenario") == "deploy_degradation")
+    assert deploy.height == 8 and (deploy["split"] == "test").sum() >= 2
+    lead = (deploy["start"] - deploy["signal_start"]).dt.total_minutes().to_list()
+    assert all(20 <= m <= 60 for m in lead)  # log báo trước giao dịch lỗi 20–60 phút
     drop_rows = frame.filter(pl.col("scenario") == "traffic_drop")
     assert drop_rows["province"].null_count() == 0 and not drop_rows["is_failure"].any()

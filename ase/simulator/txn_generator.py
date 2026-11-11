@@ -49,6 +49,7 @@ TXN_SCENARIOS_PATH = Path(__file__).resolve().parent / "txn_scenarios.yaml"
 TRANSACTIONS_TABLE = "swap_transactions"
 TXN_GROUND_TRUTH = "txn_ground_truth.csv"
 TXN_SCENARIO_INSTANCES = "scenario_instances.csv"
+CSV_DATETIME = "%Y-%m-%dT%H:%M:%S%.3fZ"  # ISO-8601 UTC kiểu `Z`, giống JSONL (schema chung)
 TXN_MANIFEST = "txn_manifest.json"
 STATION_CODES_TABLE = "station_codes"
 TXN_STATIONS_TABLE = "txn_stations"
@@ -100,6 +101,9 @@ class TxnScenarioSpec(_Strict):
     overheat_temp_c: tuple[float, float] | None = None  # nhiệt độ tủ (telemetry) khi sự cố
     repeat_count: tuple[int, int] | None = None  # effect=repeat: số giao dịch lặp của một khách
     repeat_gap_seconds: tuple[int, int] | None = None  # effect=repeat: khoảng cách giữa 2 lần
+    # Kịch bản có dấu hiệu trên log của đối tác: log bắt đầu sớm hơn giao dịch lỗi bao nhiêu phút
+    # (ghi vào đáp án `signal_start` để đối tác sinh log đúng lúc, đo lead time khách quan).
+    log_lead_minutes: tuple[int, int] | None = None
     occurrences: dict[str, int]
 
     @model_validator(mode="after")
@@ -148,6 +152,7 @@ class ScenarioInstance:
     country: str | None
     province: str | None = None  # scope=province: mã tỉnh trong mã trạm, vd `HCM`
     day_index: int = 0
+    signal_start: datetime | None = None  # lúc dấu hiệu trên log bắt đầu (chỉ kịch bản có log)
 
     def matches(
         self, t: datetime, station_id: str, cabinet_id: str, country: str, province: str = ""
@@ -394,6 +399,9 @@ def _plan_instances(
                 + timedelta(hours=rng.choice(_PEAK_START_HOURS))
                 + timedelta(minutes=rng.randrange(0, 20))
             )
+            signal_start = None
+            if spec.log_lead_minutes is not None:  # rút cuối cùng: không đổi các lần rút ở trên
+                signal_start = start - timedelta(minutes=rng.randint(*spec.log_lead_minutes))
             instances.append(
                 ScenarioInstance(
                     spec=spec,
@@ -405,6 +413,7 @@ def _plan_instances(
                     country=spec.country if spec.scope == "country" else None,
                     province=province_of(station) if spec.scope == "province" else None,
                     day_index=day,
+                    signal_start=signal_start,
                 )
             )
     # Nhiều kịch bản trùng lúc: phạm vi hẹp hơn (tủ → trạm → tỉnh → nước → toàn mạng) áp trước.
@@ -747,6 +756,7 @@ def scenario_instances_frame(result: TxnResult, profile: ProfileSpec) -> pl.Data
             "scope": [i.spec.scope for i in rows],
             "effect": [i.spec.effect for i in rows],
             "is_failure": [i.spec.is_failure for i in rows],
+            "signal_start": [i.signal_start for i in rows],
             "start": [i.start for i in rows],
             "end": [i.end for i in rows],
             "station_id": [st_code.get(i.station_id or "") for i in rows],
@@ -759,7 +769,12 @@ def scenario_instances_frame(result: TxnResult, profile: ProfileSpec) -> pl.Data
             ],
             "n_failures": [failures[i.instance_id] for i in rows],
         },
-        schema_overrides={"province": pl.String, "station_id": pl.String, "cabinet_id": pl.String},
+        schema_overrides={
+            "province": pl.String,
+            "station_id": pl.String,
+            "cabinet_id": pl.String,
+            "signal_start": pl.Datetime("us", "UTC"),
+        },
     )
 
 
@@ -814,9 +829,9 @@ async def generate_transactions(
         _write_table(out_dir, TXN_STATIONS_TABLE, result.stations, jsonl=False)
         result.telemetry.write_parquet(out_dir / TXN_TELEMETRY_FILE)
         gt_path = out_dir / TXN_GROUND_TRUTH
-        _frame(result.ground_truth).write_csv(gt_path)
+        _frame(result.ground_truth).write_csv(gt_path, datetime_format=CSV_DATETIME)
         inst_path = out_dir / TXN_SCENARIO_INSTANCES
-        scenario_instances_frame(result, profile).write_csv(inst_path)
+        scenario_instances_frame(result, profile).write_csv(inst_path, datetime_format=CSV_DATETIME)
         return {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
             for p in (*paths, gt_path, inst_path)

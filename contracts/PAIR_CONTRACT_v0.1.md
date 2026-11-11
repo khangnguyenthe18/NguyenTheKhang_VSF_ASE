@@ -42,12 +42,12 @@ mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test
 | `kind` | Chiều | Nội dung | `event_id` |
 |---|---|---|---|
 | `transaction_incident` | Khang → Nhân | Sự cố gộp từ giao dịch lỗi: phạm vi, mã lỗi chuẩn, mức High/Low, mã giao dịch liên quan | `INC-*` |
-| `baseline` | Khang → Nhân | Mức nền 7 ngày theo **tỉnh × giờ** (`scope.province`) hoặc **trạm × ngày**: số giao dịch, tỷ lệ lỗi, health score. Trạm × giờ quá thưa ở mật độ thật (~0,5 GD/giờ/trạm, ~60% giờ cao điểm không có GD) | `BASE-*` |
+| `baseline` | Khang → Nhân | Mức nền 7 ngày theo **tỉnh × giờ** (`scope.province`) hoặc **trạm × ngày**: số giao dịch, tỷ lệ lỗi, health score. Trạm × giờ quá thưa ở mật độ thật (giờ cao điểm: bình quân ~0,3 GD/giờ/trạm, HCM ~0,5; ~60% giờ cao điểm của một trạm không có GD) | `BASE-*` |
 | `behavior` | Nhân → Khang | Hành vi bất thường trên log: metric quan sát / nền / z-score, phạm vi, mức tin cậy | `BHV-*` |
 
 - **Truyền tải:** file JSONL `data/<profile>/ase.anomaly.event.v0.1.jsonl` (mỗi dòng một sự kiện).
   **Không dùng Kafka** cho tới khi cả hai cùng cần (xem lại sau CP2).
-- Thời gian ISO-8601 UTC. Mã lỗi là mã của bảng mã lỗi chuẩn, giữ nguyên văn.
+- Thời gian ISO-8601 UTC, viết hậu tố `Z` (vd `2026-10-25T11:09:00.000Z`) ở mọi file JSONL/CSV. Mã lỗi là mã của bảng mã lỗi chuẩn, giữ nguyên văn.
 - Thêm field = không phá vỡ (consumer bỏ qua field lạ). Đổi/xoá field = tăng major, cả hai đồng ý.
 - Nhân đặt `notify=true` khi cần báo người; Khang gửi trong lần quét 30 phút kế tiếp (không gửi riêng).
 - Trường tuỳ chọn (v0.2): `category` = loại hành vi trên log (chỉ cho `behavior`; không phải nhóm lỗi của bảng mã chuẩn). Giá trị cho 4 kịch bản chung: `latency_degradation` (deploy làm latency tăng dần), `traffic_drop`, `repeated_request` (trùng tên kịch bản trong `scenario_instances.csv`), `vinsoc_scan`; các loại riêng của Nhân do Nhân liệt kê; `dashboard_url` = link log stream lọc sẵn phạm vi + thời gian; `level` của `behavior`: mức cao → `High`, các mức còn lại → `Low`.
@@ -57,7 +57,7 @@ mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test
 | Mục | Chốt |
 |---|---|
 | Phạm vi | **VN** (theo góp ý Gate 0) |
-| Profile | **`pair`** = `eval` (30 ngày từ 05/10/2026, 20 nền + 10 test, 650 điểm lấy mẫu theo tỉnh, ~1.450 giao dịch/ngày theo mật độ thật ≈ 2,9 triệu GD/tháng toàn VN, seed 2042 / test 9142) **+ 2 kịch bản có dấu hiệu trên log**: `traffic_drop` (giao dịch một tỉnh đông giảm ~60% trong 3 giờ, 6 lần) và `repeated_request` (một khách tạo 5–9 giao dịch lặp tại một tủ, D6031, 6 lần). `eval` giữ nguyên để báo cáo số đo của ASE |
+| Profile | **`pair`** = `eval` (30 ngày từ 05/10/2026, 20 nền + 10 test, 650 điểm lấy mẫu theo tỉnh, ~1.450 giao dịch/ngày theo mật độ thật ≈ 2,9 triệu GD/tháng toàn VN, seed 2042 / test 9142) **+ 3 kịch bản có dấu hiệu trên log**: `deploy_degradation` (deploy lỗi dịch vụ nhận giao dịch: latency trên log tăng từ 20–60 phút trước, rồi tủ không gửi được giao dịch B0207 trong 60 phút; 8 lần, 4 trong tập test, dùng đo lead time), `traffic_drop` (giao dịch một tỉnh đông giảm ~60% trong 3 giờ, 6 lần) và `repeated_request` (một khách tạo 5–9 giao dịch lặp tại một tủ, D6031, 6 lần). Đáp án ghi sẵn `signal_start` = lúc dấu hiệu log bắt đầu, để đối tác sinh log đúng lúc, không tự chọn. `eval` giữ nguyên để báo cáo số đo của ASE |
 | Che mã | Mã trạm giữ tỉnh, 5 số giả (không trùng điểm thật); toạ độ làm tròn ~5 km. Chỉ áp cho dữ liệu dùng chung; agent không che mã khi chạy với dữ liệu thật |
 | File gửi Nhân (I1) | `swap_transactions.parquet` (+ `.jsonl`), `txn_ground_truth.csv` (đáp án từng giao dịch), **`scenario_instances.csv`** (đáp án từng lần lặp: kịch bản, phạm vi, trạm/tủ/tỉnh, bắt đầu/kết thúc UTC, số GD ảnh hưởng), `error_catalog_v1.yaml` (bảng mã lỗi chuẩn, giữ nguyên văn). Sinh lại: `make sim PROFILE=pair` |
 | Lý do không dùng 60 ngày × 8.000 phiên | Chất lượng đánh giá phụ thuộc số case lỗi, không phải tổng số; 30 ngày × 650 điểm đủ nhiều lần lặp mỗi kịch bản trong tập test và sinh + quét + báo cáo chạy khoảng 1 phút trên laptop. Cần quy mô toàn quốc thì dùng profile `scale` (toàn bộ điểm, 1 ngày ≈ 96 nghìn GD) |
