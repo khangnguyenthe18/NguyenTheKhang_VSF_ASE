@@ -192,13 +192,26 @@ def _hex(seed: int, *keys: object, n: int) -> str:
     return hashlib.sha256(":".join([str(seed), *map(str, keys)]).encode()).hexdigest()[:n]
 
 
-def station_codes(world: World, seed: int) -> dict[str, str]:
-    """Mã trạm dạng màn hình thật `B.<TỈNH><5 số>`; trạm lấy toạ độ tủ thật thì dùng mã tủ đó."""
+def station_codes(
+    world: World, seed: int, mask: bool = False, reserved: frozenset[str] = frozenset()
+) -> dict[str, str]:
+    """Mã trạm dạng màn hình thật `B.<TỈNH><5 số>`; trạm lấy toạ độ tủ thật thì dùng mã tủ đó.
+
+    `mask=True` (bộ dữ liệu dùng chung với đối tác): giữ tỉnh trong mã, thay 5 số bằng số giả
+    tất định theo seed, không trùng mã thật nào trong `reserved` → không lộ mã điểm đổi pin thật.
+    """
     out: dict[str, str] = {}
-    used: set[str] = set()
+    used: set[str] = set(reserved) if mask else set()
     for st in world.stations:
-        if st.site_code:
+        if st.site_code and not mask:
             code = st.site_code
+        elif st.site_code:
+            m = _PROVINCE_RE.match(st.site_code)
+            province = m.group(1) if m else "VN"
+            rng = substream(seed, "txn_masked_code", st.station_id)
+            code = f"B.{province}{rng.randrange(1, 100_000):05d}"
+            while code in used:
+                code = f"B.{province}{rng.randrange(1, 100_000):05d}"
         else:
             rng = substream(seed, "txn_station_code", st.station_id)
             province = _PROVINCE_BY_TZ.get(st.timezone) or rng.choice(_PROVINCES[st.country])
@@ -208,6 +221,14 @@ def station_codes(world: World, seed: int) -> dict[str, str]:
         used.add(code)
         out[st.station_id] = code
     return out
+
+
+def _masked_station(st: Station, code: str, seed: int) -> Station:
+    """Bản che của trạm: mã giả, toạ độ làm tròn 0,05° (~5 km) + lệch ngẫu nhiên tất định."""
+    rng = substream(seed, "txn_masked_geo", st.station_id)
+    lat = round(round(st.lat / 0.05) * 0.05 + rng.uniform(-0.02, 0.02), 4)
+    lon = round(round(st.lon / 0.05) * 0.05 + rng.uniform(-0.02, 0.02), 4)
+    return st.model_copy(update={"site_code": code, "lat": lat, "lon": lon})
 
 
 def battery_serial(seed: int, battery_id: str) -> str:
@@ -364,7 +385,8 @@ def simulate_transactions(
     )
     seed = profile.seed
     world = build_world(profile, common, knowledge)
-    codes = station_codes(world, seed)
+    reserved = frozenset(s.code for s in sites) if sites else frozenset()
+    codes = station_codes(world, seed, mask=profile.mask_site_codes, reserved=reserved)
     rates = station_rates(world, traffic, sites)
     instances = _plan_instances(profile_name, profile, world, scenarios, knowledge, rates)
     timing = scenarios.timing
@@ -493,7 +515,11 @@ def simulate_transactions(
         ground_truth=truth,
         instances=instances,
         cabinet_codes=cabinet_codes,
-        stations=list(world.stations),
+        stations=(
+            [_masked_station(st, codes[st.station_id], seed) for st in world.stations]
+            if profile.mask_site_codes
+            else list(world.stations)
+        ),
         telemetry=build_telemetry(
             profile, common.ambient_temp_c, world, cabinet_code, instances, txns
         ),

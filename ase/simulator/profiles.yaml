@@ -112,6 +112,7 @@ profiles:
     stations: {VN: 7, PH: 2, ID: 2}
     split: {baseline_days: 20, after: test}
     txn_sites: 650                # ~1.450 GD/ngày, đúng mật độ thực tế mỗi điểm
+    mask_site_codes: true         # bộ dữ liệu dùng chung với đối tác: che mã điểm đổi pin thật
   scale:
     # Toàn bộ điểm đổi pin VN thật, 1 ngày (~95 nghìn GD): chỉ đo hiệu năng quét / báo cáo ở quy
     # mô thật. Không sinh dữ liệu pipeline cũ, không telemetry, không đo SF.

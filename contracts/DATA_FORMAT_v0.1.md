@@ -6,7 +6,7 @@ Kèm `PAIR_CONTRACT_v0.1.md`. Mục đích: để log của đối tác dùng **
 
 | Cột | Kiểu | Ví dụ | Ghi chú |
 |---|---|---|---|
-| `station_id` | chuỗi | `B.HCM24156` | Mã trạm `B.<TỈNH><5 số>` |
+| `station_id` | chuỗi | `B.HCM24156` | Mã trạm `B.<TỈNH><5 số>`. Profile `eval` **đã che mã**: giữ tỉnh, 5 số là số giả (không trùng mã điểm đổi pin thật); toạ độ trạm làm tròn ~5 km |
 | `cabinet_id` | chuỗi | `B.HCM24156.002` | Mã tủ = mã trạm + `.<3 số>` |
 | `cabinet_serial` | chuỗi | `BSS-30319410305241` | S/N tủ |
 | `cabinet_type` | chuỗi | `CC_06_P` / `CC_12_P` | 6 hoặc 12 connector |

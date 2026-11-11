@@ -83,6 +83,9 @@ class ProfileSpec(_Strict):
     txn_heartbeat_minutes: int = Field(default=10, ge=1)
     txn_telemetry: bool = True
     txn_only: bool = False  # profile chỉ có danh sách giao dịch (không sinh dữ liệu pipeline cũ)
+    # Che mã điểm đổi pin thật (bộ dữ liệu dùng chung với đối tác): mã trạm giữ tỉnh, 5 số giả;
+    # toạ độ làm tròn ~5 km. Mật độ, phân bổ theo tỉnh, số đo không đổi.
+    mask_site_codes: bool = False
 
     def seed_for_day(self, day_index: int) -> int:
         """Ngày thuộc tập test dùng `test_seed` (khác seed dev) để tránh overfit."""

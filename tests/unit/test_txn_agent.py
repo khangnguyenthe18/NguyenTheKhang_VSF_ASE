@@ -530,3 +530,38 @@ def test_station_outage_seen_at_two_cabinets_hours_apart_is_one_incident() -> No
     t2 = t1 + timedelta(hours=5)
     (third,) = a.analyze(t2, _result([_det(3, "B6025", cab="001", at=t2)], per_cabinet=1))
     assert third.incident_id == first.incident_id
+
+
+def test_masked_site_codes_hide_real_codes_but_keep_province_and_traffic() -> None:
+    from ase.simulator.profiles import load_profiles
+    from ase.simulator.real_sites import load_real_sites
+
+    sites = load_real_sites()
+    if not sites:
+        pytest.skip("chưa có vinfast_bss.json.gz (dữ liệu ngoài, không commit)")
+    real = {s.code for s in sites}
+    profiles = load_profiles()
+    smoke = profiles.profiles["smoke"]
+    masked_profiles = profiles.model_copy(
+        update={
+            "profiles": {
+                **profiles.profiles,
+                "smoke": smoke.model_copy(update={"mask_site_codes": True}),
+            }
+        }
+    )
+    plain, masked = (
+        simulate_transactions("smoke"),
+        simulate_transactions("smoke", profiles=masked_profiles),
+    )
+    plain_codes = [t.station_id for t in plain.transactions]
+    masked_codes = [t.station_id for t in masked.transactions]
+    assert set(plain_codes) <= real
+    assert not set(masked_codes) & real  # không lộ mã thật nào
+    assert [c.split(".")[1][:3] for c in plain_codes] == [c.split(".")[1][:3] for c in masked_codes]
+    assert len(plain.transactions) == len(masked.transactions)  # cùng lưu lượng
+    assert [t.status for t in plain.transactions] == [t.status for t in masked.transactions]
+    assert all(st.site_code not in real for st in masked.stations)
+    assert (
+        masked.transactions == simulate_transactions("smoke", profiles=masked_profiles).transactions
+    )
