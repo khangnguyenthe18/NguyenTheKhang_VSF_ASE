@@ -127,19 +127,12 @@
     });
   }
 
-  /* --- Bản đồ nguồn tủ/trạm VinFast (Canvas layer) ------------------------
-   * 3 nguồn KHÁC BẢN CHẤT, phải ghi nhãn rõ để người xem không nhầm là cùng loại:
-   *  - VN: 43.297 tủ đổi pin VinFast thật.
-   *  - ID: trạm SẠC VinFast Indonesia (không phải tủ đổi pin), chỉ để tham khảo.
-   *  - PH: dữ liệu MÔ PHỎNG bám theo đại lý & hạ tầng V-Green.
-   * Chỉ để hiển thị; không dùng đo SF. Giao dịch chỉ có ở trạm mô phỏng của simulator. */
+  /* --- Bản đồ tủ đổi pin VinFast VN (Canvas layer) ------------------------
+   * Chỉ VN (phạm vi đề tài, góp ý Gate 0): 43.297 tủ đổi pin VinFast thật; API đã lọc bỏ nước khác.
+   * Chỉ để hiển thị; không dùng đo SF. */
   var BSS_SOURCES = {
     VN: { label: "Tủ đổi pin VinFast (dữ liệu thật)", short: "Tủ đổi pin", unit: "tủ đổi pin VN",
-          color: "#1464f4", halo: "rgba(20, 100, 244, 0.22)" },
-    ID: { label: "Trạm sạc VinFast Indonesia (tham khảo)", short: "Trạm sạc ID (tham khảo)",
-          unit: "trạm sạc ID (tham khảo)", color: "#0d9488", halo: "rgba(13, 148, 136, 0.22)" },
-    PH: { label: "Dữ liệu mô phỏng bám theo đại lý & hạ tầng V-Green", short: "Mô phỏng PH",
-          unit: "điểm mô phỏng PH", color: "#d97706", halo: "rgba(217, 119, 6, 0.22)" }
+          color: "#1464f4", halo: "rgba(20, 100, 244, 0.22)" }
   };
   function bssSource(row) {
     return BSS_SOURCES[row._cc] || BSS_SOURCES.VN;
@@ -204,20 +197,12 @@
   }
 
   var BSS_COUNTRIES = [
-    { code: "ALL", label: "Tất cả", bounds: [[-11.5, 95.0], [23.4, 127.0]] },
-    { code: "VN", label: "VN", bounds: [[8.4, 102.1], [23.4, 109.5]] },
-    { code: "ID", label: "ID", bounds: [[-11.0, 95.0], [6.2, 141.0]] },
-    { code: "PH", label: "PH", bounds: [[4.5, 116.5], [21.2, 127.0]] }
+    { code: "VN", label: "VN", bounds: [[8.4, 102.1], [23.4, 109.5]] }
   ];
 
-  // Quốc gia của một tủ: ưu tiên trường row[5] nếu dữ liệu có, nếu không suy ra từ tọa độ.
-  function detectBssCountry(row) {
-    if (row[5]) return String(row[5]).toUpperCase();
-    var lat = row[0], lon = row[1];
-    if (lat >= 8.0 && lat <= 23.5 && lon >= 102.0 && lon <= 110.0) return "VN";
-    if (lat >= 4.5 && lat <= 21.5 && lon >= 116.5 && lon <= 127.0) return "PH";
-    if (lat >= -11.5 && lat <= 6.5 && lon >= 95.0 && lon <= 141.0) return "ID";
-    return "OTHER";
+  // Chỉ VN: mọi tủ API trả về đều là tủ VN.
+  function detectBssCountry(_row) {
+    return "VN";
   }
 
   function rowsBounds(rows) {
@@ -241,7 +226,7 @@
     }
 
     var seaBounds = BSS_COUNTRIES[0].bounds;
-    var map = L.map(mapEl, { minZoom: 3, preferCanvas: true }).setView([8.0, 112.0], 4);
+    var map = L.map(mapEl, { minZoom: 4, preferCanvas: true }).setView([16.0, 106.0], 5);
     globalLeafletMap = map;
 
     // Nền bản đồ Vietmap (vector, qua plugin @vietmap/vietmap-gl-leaflet). Không dùng OSM.
@@ -261,7 +246,7 @@
     }
 
     // 4 ô chọn quốc gia theo 1 hàng dọc ở góc trên bên trái bản đồ (Leaflet Control)
-    var activeCountry = "ALL";
+    var activeCountry = "VN";
     var countryBtns = {};
 
     var CountryToolbarControl = L.Control.extend({
@@ -296,7 +281,8 @@
         return container;
       }
     });
-    map.addControl(new CountryToolbarControl());
+    // Chỉ còn VN nên không gắn thanh chọn quốc gia; giữ control để thêm nước sau này.
+    if (BSS_COUNTRIES.length > 1) map.addControl(new CountryToolbarControl());
 
     function refreshCountryBtns() {
       Object.keys(countryBtns).forEach(function (k) {
@@ -560,7 +546,7 @@
     function applyBssFilter(zoomToMatches) {
       var q = searchInput.value.trim().toLowerCase();
       refreshCountryBtns();
-      var base = activeCountry === "ALL"
+      var base = BSS_COUNTRIES.length === 1
         ? allRows
         : allRows.filter(function (r) { return r._cc === activeCountry; });
       if (!q) {
@@ -627,7 +613,7 @@
           rows.forEach(function (r) { r._cc = detectBssCountry(r); });
           allRows = rows;
           filteredRows = rows;
-          // Khung nhìn ôm toàn bộ tủ đang có (VN + ID + PH nếu dữ liệu có đủ)
+          // Khung nhìn ôm toàn bộ tủ VN
           var known = rows.filter(function (r) { return r._cc !== "OTHER"; });
           if (known.length) map.fitBounds(rowsBounds(known), { padding: [20, 20], animate: false });
           scheduleRender();

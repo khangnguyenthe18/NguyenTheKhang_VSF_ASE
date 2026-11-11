@@ -454,12 +454,11 @@ def test_vinfast_bss_api_returns_43297_cabinets(smoke_env: tuple[Settings, Path]
     assert resp.status_code == 200
     rows = resp.json()
     assert isinstance(rows, list)
-    # 3 nguồn: dòng 5 cột = tủ đổi pin VN thật (file gốc 43.298, đã loại tủ sai toạ độ
-    # B.TNG10178); dòng 6 cột có mã nước = ID (trạm sạc, tham khảo) / PH (mô phỏng).
+    # Chỉ VN (phạm vi đề tài): 43.297 tủ đổi pin thật (file gốc 43.298, đã loại tủ sai toạ độ
+    # B.TNG10178). File nguồn có thể còn dòng ID/PH (cột thứ 6): API phải lọc bỏ.
     vn = [r for r in rows if len(r) == 5]
-    others = [r for r in rows if len(r) != 5]
     assert len(vn) == 43297
-    assert all(len(r) == 6 and r[5] in {"ID", "PH"} for r in others)
+    assert len(rows) == len(vn)
     for lat, lon, code, name, address in vn[:1]:
         assert isinstance(lat, float) and 8.0 <= lat <= 24.0
         assert isinstance(lon, float) and 102.0 <= lon <= 110.0

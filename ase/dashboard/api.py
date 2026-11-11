@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
+import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from ase.common.config import Settings, get_settings
@@ -271,14 +272,19 @@ _VINFAST_BSS_GZ_PATH = Path(__file__).resolve().parent / "static" / "vinfast_bss
 
 @functools.lru_cache(maxsize=1)
 def _load_vinfast_bss_payloads() -> tuple[bytes, bytes]:
-    gz_bytes = _VINFAST_BSS_GZ_PATH.read_bytes()
-    raw_bytes = gzip.decompress(gz_bytes)
-    return gz_bytes, raw_bytes
+    """Chỉ giữ tủ VN (phạm vi đề tài chỉ VN, góp ý Gate 0).
+
+    File nguồn có thể còn dòng nước khác (cột thứ 6 = mã nước); dòng không có cột này là tủ VN.
+    """
+    rows = orjson.loads(gzip.decompress(_VINFAST_BSS_GZ_PATH.read_bytes()))
+    vn = [r for r in rows if len(r) < 6 or not r[5] or str(r[5]).upper() == "VN"]
+    raw_bytes = orjson.dumps(vn)
+    return gzip.compress(raw_bytes, mtime=0), raw_bytes
 
 
 @router.get("/vinfast-bss")
 async def api_vinfast_bss(request: Request) -> Response:
-    """Danh sách tọa độ tủ đổi pin `[lat, lon, code, name, addr, (country)]`."""
+    """Danh sách tọa độ tủ đổi pin VN `[lat, lon, code, name, addr]`."""
     if not _VINFAST_BSS_GZ_PATH.exists():
         raise HTTPException(status_code=404, detail="Chưa có dữ liệu vinfast_bss.json.gz")
     gz_bytes, raw_bytes = _load_vinfast_bss_payloads()

@@ -3,7 +3,7 @@
 {% block title %}Bản đồ trạm — ASE BSS NOC{% endblock %}
 {% block content %}
 <section>
-  {% call w.widget_card(id="widget-station-map", title="Bản đồ Tủ đổi pin VinFast", subtitle="VN: 43.297 tủ đổi pin thực tế · ID: Trạm sạc VinFast Indonesia (tham khảo) · PH: Dữ liệu mô phỏng bám theo đại lý & hạ tầng V-Green") %}
+  {% call w.widget_card(id="widget-station-map", title="Bản đồ Tủ đổi pin VinFast", subtitle="43.297 tủ đổi pin VinFast thực tế tại Việt Nam") %}
     <div id="stations-map" class="map-box map-box-full" data-vietmap-key="{{ vietmap_key or '' }}"></div>
   {% endcall %}
 </section>
