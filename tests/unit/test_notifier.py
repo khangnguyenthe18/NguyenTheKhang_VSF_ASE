@@ -545,6 +545,8 @@ async def test_root_redirects_to_dashboard_while_mock_teams_ui_is_off(tmp_path: 
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         root = await client.get("/?channel=it-ops")
         assert root.status_code == 307 and root.headers["location"] == "/dashboard"
+        teams = await client.get("/teams")  # trang Teams luôn xem được ở /teams
+        assert teams.status_code == 200 and 'href="/teams?channel=ops"' in teams.text
         posted = await client.post("/webhook/it-ops", json={"incident_id": "INC-X", "revision": 1})
         assert posted.status_code < 300
         fb = await client.post("/feedback/INC-X/confirm")

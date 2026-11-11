@@ -168,6 +168,13 @@ async def test_e2e_smoke_kafka_matches_jsonl_and_dedups_and_handles_bad_mqtt(
         except asyncio.CancelledError:
             pass
         await bridge_sink.close()
+        # Dọn topic của lần chạy này: không dọn thì Redpanda chạm giới hạn partition sau ~100 lần.
+        cleanup = AIOKafkaAdminClient(bootstrap_servers="127.0.0.1:19092")
+        await cleanup.start()
+        try:
+            await cleanup.delete_topics([ev_topic, tel_topic])
+        finally:
+            await cleanup.close()
 
     # Verify set of detected session_ids is identical to JSONL
     jsonl_sids = {

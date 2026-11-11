@@ -236,8 +236,14 @@ def create_app(
     async def index(channel: str | None = None) -> Response:
         cfg: Settings = app.state.settings or get_settings()
         if not cfg.mock_teams_ui:
-            # Tạm tắt giao diện mock Teams: "/" mở dashboard. Bật lại: ASE_MOCK_TEAMS_UI=true
+            # "/" mở dashboard; trang mock Teams luôn xem được ở /teams.
+            # Đưa trang Teams về "/" như cũ: ASE_MOCK_TEAMS_UI=true
             return RedirectResponse("/dashboard", status_code=307)
+        return await teams_page(channel)
+
+    @app.get("/teams", response_class=HTMLResponse)
+    async def teams_page(channel: str | None = None) -> HTMLResponse:
+        """Trang xem card mock Teams (kênh OPS nhận 1 card mỗi lần quét có lỗi)."""
         target_db = _resolve_db_path()
         await _ensure_db(target_db)
 
@@ -275,14 +281,14 @@ def create_app(
         channel_map = dict(CHANNELS)
         all_cls = "active" if not channel else ""
         sidebar_items: list[str] = [
-            f'<a href="/" class="ch-link {all_cls}">Tất cả kênh ({sum(counts.values())})</a>'
+            f'<a href="/teams" class="ch-link {all_cls}">Tất cả kênh ({sum(counts.values())})</a>'
         ]
         for slug, name in CHANNELS:
             cnt = counts.get(slug, 0)
             active = "active" if channel == slug else ""
             esc_slug = html.escape(slug)
             sidebar_items.append(
-                f'<a href="/?channel={esc_slug}" class="ch-link {active}"'
+                f'<a href="/teams?channel={esc_slug}" class="ch-link {active}"'
                 f' data-channel="{esc_slug}"># {html.escape(name)}'
                 f' <span class="badge">{cnt}</span></a>'
             )
