@@ -3,6 +3,7 @@
   "event_id": "BHV-20261026-0042",
   "source": "partner",
   "kind": "behavior",
+  "category": "latency_increase",
   "detected_at": "2026-10-26T11:18:03Z",
   "window": {"start": "2026-10-26T11:00:00Z", "end": "2026-10-26T11:15:00Z"},
   "scope": {"country": "VN", "service": "txn-upload-service"},

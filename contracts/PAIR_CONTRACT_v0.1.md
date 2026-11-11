@@ -1,6 +1,6 @@
 # Pair contract v0.2 — Nguyễn Thế Khang (ASE) × Võ Doanh Nhân
 
-> **v0.2** (trả lời 7 điểm của Nhân trước I1): mã điểm đổi pin trong dữ liệu chung đã che; bộ dữ liệu chung là profile `pair` (thêm 2 kịch bản sụt traffic theo tỉnh, request lặp lại) + đáp án mức lần lặp `scenario_instances.csv`; `baseline` theo tỉnh × giờ hoặc trạm × ngày (thêm trường tuỳ chọn `scope.province`); lead time đo theo lần quét. Schema vẫn `0.1` (chỉ thêm trường tuỳ chọn); tên file giữ nguyên để không vỡ đường dẫn.
+> **v0.2** (trả lời 7 điểm của Nhân trước I1): mã điểm đổi pin trong dữ liệu chung đã che; bộ dữ liệu chung là profile `pair` (thêm 2 kịch bản sụt traffic theo tỉnh, request lặp lại) + đáp án mức lần lặp `scenario_instances.csv`; `baseline` theo tỉnh × giờ hoặc trạm × ngày (thêm trường tuỳ chọn `scope.province`); lead time đo theo lần quét, kèm chênh lệch theo phút; thêm 2 trường tuỳ chọn `category`, `dashboard_url` (đề xuất của Nhân). Schema vẫn `0.1` (chỉ thêm trường tuỳ chọn); tên file giữ nguyên để không vỡ đường dẫn.
 
 Bản hợp nhất duy nhất, thay hai bản v0 riêng của mỗi người. Mọi thay đổi sửa trực tiếp file này
 (trong repo chung) và cả hai cùng xác nhận ở mục 7.
@@ -50,6 +50,7 @@ mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test
 - Thời gian ISO-8601 UTC. Mã lỗi là mã của bảng mã lỗi chuẩn, giữ nguyên văn.
 - Thêm field = không phá vỡ (consumer bỏ qua field lạ). Đổi/xoá field = tăng major, cả hai đồng ý.
 - Nhân đặt `notify=true` khi cần báo người; Khang gửi trong lần quét 30 phút kế tiếp (không gửi riêng).
+- Trường tuỳ chọn (v0.2): `category` = loại hành vi trên log (chỉ cho `behavior`; không phải nhóm lỗi của bảng mã chuẩn); `dashboard_url` = link log stream lọc sẵn phạm vi + thời gian; `level` của `behavior`: mức cao → `High`, các mức còn lại → `Low`.
 
 ## 4. Phiên bản dữ liệu chung
 
@@ -60,7 +61,8 @@ mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test
 | Che mã | Mã trạm giữ tỉnh, 5 số giả (không trùng điểm thật); toạ độ làm tròn ~5 km. Chỉ áp cho dữ liệu dùng chung; agent không che mã khi chạy với dữ liệu thật |
 | File gửi Nhân (I1) | `swap_transactions.parquet` (+ `.jsonl`), `txn_ground_truth.csv` (đáp án từng giao dịch), **`scenario_instances.csv`** (đáp án từng lần lặp: kịch bản, phạm vi, trạm/tủ/tỉnh, bắt đầu/kết thúc UTC, số GD ảnh hưởng), `error_catalog_v1.yaml` (bảng mã lỗi chuẩn, giữ nguyên văn). Sinh lại: `make sim PROFILE=pair` |
 | Lý do không dùng 60 ngày × 8.000 phiên | Chất lượng đánh giá phụ thuộc số case lỗi, không phải tổng số; 30 ngày × 650 điểm đủ nhiều lần lặp mỗi kịch bản trong tập test và sinh + quét + báo cáo chạy khoảng 1 phút trên laptop. Cần quy mô toàn quốc thì dùng profile `scale` (toàn bộ điểm, 1 ngày ≈ 96 nghìn GD) |
-| Log của Nhân | Sinh theo cùng seed và cùng mã trạm/tủ/giao dịch của `swap_transactions.parquet`; khối lượng log do Nhân chọn |
+| Định dạng gửi | **JSONL / CSV** (đối tác chỉ dùng thư viện chuẩn Python): `swap_transactions.jsonl`, `txn_ground_truth.csv`, `scenario_instances.csv`, `error_catalog_v1.csv` (bảng mã lỗi chuẩn chuyển nguyên văn từ YAML: cùng 5 cột, cùng thứ tự dòng) |
+| Log của Nhân | Sinh theo cùng seed và cùng mã trạm/tủ/giao dịch của `swap_transactions.jsonl`; khối lượng log do Nhân chọn. Kịch bản log: deploy làm latency tăng dần, sụt traffic (request tạo phiên thấp hẳn so với mức nền), request lặp lại, VinSOC scan (chỉ có ở log; quét đúng nguồn, đúng lịch là **bẫy**, không báo; ngoài lịch hoặc nguồn lạ mới báo) |
 
 ## 5. Mốc tích hợp
 
@@ -76,7 +78,7 @@ mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test
 
 | Metric | Cách đo | Ngưỡng (C so với A hoặc B) |
 |---|---|---|
-| Lead time | Lần quét 30 phút đầu tiên OPS được báo cho các kịch bản có dấu hiệu log (deploy làm latency tăng dần → giao dịch lỗi). Nhịp 30 phút giữ theo yêu cầu mentor (chống spam), nên đo theo số lần quét | C sớm hơn A **≥ 1 lần quét** trên ≥ 80% các kịch bản đó |
+| Lead time | Lần quét 30 phút đầu tiên OPS được báo cho các kịch bản có dấu hiệu log (deploy làm latency tăng dần → giao dịch lỗi). Nhịp 30 phút giữ theo yêu cầu mentor (chống spam), nên đo theo số lần quét | C sớm hơn A **≥ 1 lần quét** trên ≥ 80% các kịch bản đó. Báo kèm chênh lệch theo phút giữa `detected_at` của Nhân và thời điểm giao dịch đầu tiên lỗi, để thấy giá trị cả khi hai bên rơi vào cùng một lần quét |
 | Bằng chứng nguyên nhân | % sự cố/open point có `BHV-*` hợp lệ và khớp kịch bản | C ≥ 50%; A = 0% theo định nghĩa |
 | Độ chính xác cảnh báo "sụt giảm theo khung giờ" của Nhân | Precision khi dùng `baseline` của Khang so với ngưỡng cố định | C cao hơn B ≥ 10 điểm %, recall không giảm |
 | Nhiễu | Số cảnh báo trùng giữa hai hệ cho cùng sự cố | 0 |

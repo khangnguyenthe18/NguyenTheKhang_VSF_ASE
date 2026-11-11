@@ -63,13 +63,18 @@ class AnomalyEvent(BaseModel):
     window: Window
     scope: Scope
     codes: list[str] = Field(default_factory=list)  # mã bảng chuẩn (nếu có)
-    level: Literal["High", "Low"] | None = None  # mức theo bảng chuẩn
+    # mức theo bảng chuẩn; behavior: Nhân quy đổi mức cao → High, các mức còn lại → Low
+    level: Literal["High", "Low"] | None = None
     metrics: list[Metric] = Field(default_factory=list)
     related_txn_ids: list[str] = Field(default_factory=list, max_length=50)  # mã GD eMSP
     evidence: list[str] = Field(default_factory=list, max_length=10)  # INC-*/BHV-*/mã GD
     summary: str = Field(max_length=500)
     confidence: float = Field(ge=0, le=1)
     notify: bool = False  # Nhân đặt true khi cần báo người: ASE là kênh push DUY NHẤT
+    # v0.2 (đề xuất của Nhân, trường tuỳ chọn, không phá vỡ):
+    # loại hành vi trên log (chỉ dùng cho kind=behavior; KHÔNG phải nhóm lỗi của bảng mã chuẩn)
+    category: str | None = None
+    dashboard_url: str | None = None  # link log stream của Nhân, lọc sẵn phạm vi + thời gian
 
     @field_validator("detected_at")
     @classmethod
