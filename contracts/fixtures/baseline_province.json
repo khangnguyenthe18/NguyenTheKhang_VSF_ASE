@@ -1,0 +1,15 @@
+{
+  "schema_version": "0.1",
+  "event_id": "BASE-HCM-H18-20261025",
+  "source": "ase",
+  "kind": "baseline",
+  "detected_at": "2026-10-26T01:00:00Z",
+  "window": {"start": "2026-10-19T01:00:00Z", "end": "2026-10-26T01:00:00Z"},
+  "scope": {"country": "VN", "province": "HCM"},
+  "metrics": [
+    {"name": "txn_count_per_hour", "observed": 45.0, "unit": "giao dịch/giờ", "hour_local": 18},
+    {"name": "fail_rate", "observed": 0.043, "unit": "tỷ lệ"}
+  ],
+  "summary": "Mức nền 7 ngày của tỉnh HCM khung 18:00–19:00 giờ VN (các điểm trong bộ dữ liệu chung)",
+  "confidence": 1.0
+}

@@ -17,7 +17,7 @@ import math
 import random
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -48,6 +48,7 @@ from ase.simulator.traffic import Arrival, hourly_weights, local_day_start_utc
 TXN_SCENARIOS_PATH = Path(__file__).resolve().parent / "txn_scenarios.yaml"
 TRANSACTIONS_TABLE = "swap_transactions"
 TXN_GROUND_TRUTH = "txn_ground_truth.csv"
+TXN_SCENARIO_INSTANCES = "scenario_instances.csv"
 TXN_MANIFEST = "txn_manifest.json"
 STATION_CODES_TABLE = "station_codes"
 TXN_STATIONS_TABLE = "txn_stations"
@@ -60,8 +61,9 @@ _CABINET_TYPES = {"CC_06_P": 6, "CC_12_P": 12}  # loại tủ → số connector
 _PEAK_START_HOURS = (7, 8, 17, 18)  # kịch bản bắt đầu trong giờ cao điểm địa phương để có đủ case
 _CABINET_TXN_BASE = 12_000_000
 
-Effect = Literal["fail", "stuck_created", "stuck_battery_in", "slow"]
-Scope = Literal["cabinet", "station", "country", "global"]
+# drop: giao dịch không xảy ra (sụt traffic); repeat: một khách tạo giao dịch lặp lại liên tục.
+Effect = Literal["fail", "stuck_created", "stuck_battery_in", "slow", "drop", "repeat"]
+Scope = Literal["cabinet", "station", "province", "country", "global"]
 
 
 class _Strict(BaseModel):
@@ -96,19 +98,28 @@ class TxnScenarioSpec(_Strict):
     codes: list[CodeSpec] = Field(default_factory=list)
     slow_seconds: tuple[int, int] | None = None
     overheat_temp_c: tuple[float, float] | None = None  # nhiệt độ tủ (telemetry) khi sự cố
+    repeat_count: tuple[int, int] | None = None  # effect=repeat: số giao dịch lặp của một khách
+    repeat_gap_seconds: tuple[int, int] | None = None  # effect=repeat: khoảng cách giữa 2 lần
     occurrences: dict[str, int]
 
     @model_validator(mode="after")
     def _consistent(self) -> TxnScenarioSpec:
-        if (self.effect == "fail") != bool(self.codes):
-            raise ValueError(f"{self.name}: chỉ effect=fail mới có `codes`, và bắt buộc phải có")
+        if (self.effect in ("fail", "repeat")) != bool(self.codes):
+            raise ValueError(f"{self.name}: chỉ effect=fail/repeat mới có `codes`, và bắt buộc có")
         if (self.effect == "slow") != (self.slow_seconds is not None):
             raise ValueError(f"{self.name}: effect=slow cần `slow_seconds`")
+        is_repeat = self.effect == "repeat"
+        if is_repeat != (self.repeat_count is not None and self.repeat_gap_seconds is not None):
+            raise ValueError(f"{self.name}: effect=repeat cần `repeat_count`, `repeat_gap_seconds`")
+        if is_repeat and self.scope != "cabinet":
+            raise ValueError(f"{self.name}: effect=repeat chỉ dùng scope=cabinet")
+        if (self.effect == "drop") != (self.scope == "province"):
+            raise ValueError(f"{self.name}: effect=drop đi với scope=province (và ngược lại)")
         return self
 
     @property
     def is_failure(self) -> bool:
-        return self.effect != "slow"
+        return self.effect not in ("slow", "drop")
 
 
 class TxnScenariosFile(_Strict):
@@ -135,10 +146,20 @@ class ScenarioInstance:
     station_id: str | None  # mã trạm nội bộ của World
     cabinet_id: str | None
     country: str | None
+    province: str | None = None  # scope=province: mã tỉnh trong mã trạm, vd `HCM`
+    day_index: int = 0
 
-    def matches(self, t: datetime, station_id: str, cabinet_id: str, country: str) -> bool:
+    def matches(
+        self, t: datetime, station_id: str, cabinet_id: str, country: str, province: str = ""
+    ) -> bool:
+        if (
+            self.spec.effect == "repeat"
+        ):  # giao dịch lặp do simulator chèn riêng, không khớp theo giờ
+            return False
         if not self.start <= t < self.end:
             return False
+        if self.province is not None:
+            return province == self.province
         if self.cabinet_id is not None:
             return cabinet_id == self.cabinet_id
         if self.station_id is not None:
@@ -161,7 +182,7 @@ class TxnManifest(BaseModel):
     n_failures: int
     sha256: dict[str, str]
     by_scenario: dict[str, int]  # "<kịch bản>|<split>" → số giao dịch lỗi ("background" = lỗi nền)
-    instances: dict[str, int]  # scenario_instance_id → số giao dịch bị ảnh hưởng
+    instances: dict[str, int]  # scenario_instance_id → số giao dịch bị ảnh hưởng (drop: bị mất)
 
 
 class CabinetCodeRow(BaseModel):
@@ -186,6 +207,7 @@ class TxnResult:
     cabinet_codes: list[CabinetCodeRow]
     stations: list[Station]  # trạm của thế giới danh sách giao dịch, mã nội bộ
     telemetry: pl.DataFrame  # schema của `CabinetTelemetry`, mã tủ vận hành
+    dropped: dict[str, int] = field(default_factory=dict)  # kịch bản sụt traffic: số GD bị mất
 
 
 def _hex(seed: int, *keys: object, n: int) -> str:
@@ -269,6 +291,30 @@ def station_rates(
     return out
 
 
+def province_of(station: Station) -> str:
+    """Mã tỉnh trong mã điểm đổi pin thật (`B.HCM01234` → `HCM`); trạm không có mã → ``."""
+    m = _PROVINCE_RE.match(station.site_code or "")
+    return m.group(1) if m else ""
+
+
+def _repeat_arrivals(
+    instances: list[ScenarioInstance], seed: int
+) -> dict[tuple[str, datetime], ScenarioInstance]:
+    """Giao dịch lặp của kịch bản `repeat`: một khách tạo liên tục ở một tủ, cách nhau vài phút."""
+    out: dict[tuple[str, datetime], ScenarioInstance] = {}
+    for inst in instances:
+        spec = inst.spec
+        if spec.effect != "repeat" or inst.station_id is None:
+            continue
+        assert spec.repeat_count is not None and spec.repeat_gap_seconds is not None
+        rng = substream(seed, "txn_repeat", inst.instance_id)
+        t = inst.start
+        for _ in range(rng.randint(*spec.repeat_count)):
+            out[(inst.station_id, t)] = inst
+            t = _after(rng, t, spec.repeat_gap_seconds)
+    return out
+
+
 def _poisson(rng: random.Random, lam: float) -> int:
     """Poisson nhỏ (λ ≲ 30) theo Knuth; dùng RNG tất định của simulator."""
     limit, k, p = math.exp(-lam), 0, 1.0
@@ -330,7 +376,15 @@ def _plan_instances(
             # giao dịch thì danh sách giao dịch không thể thấy (giới hạn này ghi trong báo cáo).
             station = rng.choices(pool, weights=[rates[s.station_id] for s in pool])[0]
             cabinet = rng.choice(world.cabinets_of_station[station.station_id])
-            if spec.scope in ("cabinet", "station"):
+            if spec.scope == "province":
+                # Sụt traffic chỉ nhìn thấy ở tỉnh đủ đông: chọn trong 5 tỉnh nhiều giao dịch nhất.
+                by_prov: dict[str, float] = {}
+                for s in pool:
+                    by_prov[province_of(s)] = by_prov.get(province_of(s), 0.0) + rates[s.station_id]
+                top = sorted(by_prov, key=lambda p: (-by_prov[p], p))[:5]
+                prov = rng.choices(top, weights=[by_prov[p] for p in top])[0]
+                station = next(s for s in pool if province_of(s) == prov)
+            if spec.scope in ("cabinet", "station", "province"):
                 tz = station.timezone
             else:  # country / global: neo theo múi giờ đầu tiên của nước (global: VN nếu có)
                 anchor = spec.country or ("VN" if "VN" in profile.stations else station.country)
@@ -349,10 +403,12 @@ def _plan_instances(
                     station_id=station.station_id if spec.scope in ("cabinet", "station") else None,
                     cabinet_id=cabinet.cabinet_id if spec.scope == "cabinet" else None,
                     country=spec.country if spec.scope == "country" else None,
+                    province=province_of(station) if spec.scope == "province" else None,
+                    day_index=day,
                 )
             )
-    # Nhiều kịch bản trùng lúc: phạm vi hẹp hơn (tủ → trạm → nước → toàn mạng) được áp trước.
-    order = {"cabinet": 0, "station": 1, "country": 2, "global": 3}
+    # Nhiều kịch bản trùng lúc: phạm vi hẹp hơn (tủ → trạm → tỉnh → nước → toàn mạng) áp trước.
+    order = {"cabinet": 0, "station": 1, "province": 2, "country": 3, "global": 4}
     return sorted(instances, key=lambda i: order[i.spec.scope])
 
 
@@ -403,10 +459,20 @@ def simulate_transactions(
 
     txns: list[SwapTransaction] = []
     truth: list[TxnGroundTruthRow] = []
+    dropped: Counter[str] = Counter()
     arrivals = generate_txn_arrivals(profile, common, world, rates)
-    for seq, arr in enumerate(arrivals, start=1):
+    repeats = _repeat_arrivals(instances, seed)
+    if repeats:  # chỉ profile có kịch bản `repeat` (vd `pair`); profile khác giữ nguyên thứ tự
+        users = world.users_by_country_state
+        arrivals += [
+            Arrival(st_id, inst.day_index, t) for (st_id, t), inst in sorted(repeats.items())
+        ]
+        arrivals.sort(key=lambda a: (a.started_at, a.station_id))
+    provinces = {st.station_id: province_of(st) for st in world.stations}
+    seq = 0
+    for arr in arrivals:
         station = world.station_by_id[arr.station_id]
-        rng = substream(profile.seed_for_day(arr.day_index), "txn", seq)
+        rng = substream(profile.seed_for_day(arr.day_index), "txn", seq + 1)
         cab: CabinetInfo = rng.choice(world.cabinets_of_station[arr.station_id])
         ctype = cabinet_type[cab.cabinet_id]
         slot_in, slot_out = rng.sample(range(1, _CABINET_TYPES[ctype] + 1), 2)
@@ -414,18 +480,34 @@ def simulate_transactions(
         user = rng.choice(world.users_by_country_state[(station.country, USER_NORMAL)])
         t0 = arr.started_at
 
-        hit = next(
+        repeat = repeats.get((arr.station_id, t0))
+        hit = repeat or next(
             (
                 i
                 for i in instances
-                if i.matches(t0, arr.station_id, cab.cabinet_id, station.country)
+                if i.matches(
+                    t0, arr.station_id, cab.cabinet_id, station.country, provinces[arr.station_id]
+                )
             ),
             None,
         )
+        if hit is not None and hit.spec.effect == "drop" and rng.random() < hit.spec.fail_prob:
+            dropped[hit.instance_id] += 1
+            continue  # sụt traffic: giao dịch này không xảy ra
+        seq += 1
+        if repeat is not None:
+            assert repeat.cabinet_id is not None
+            cab = world.cabinet_info[repeat.cabinet_id]
+            ctype = cabinet_type[cab.cabinet_id]
+            slot_in, slot_out = rng.sample(range(1, _CABINET_TYPES[ctype] + 1), 2)
+            pool_u = users[(station.country, USER_NORMAL)]
+            user = substream(seed, "txn_repeat_user", repeat.instance_id).choice(pool_u)
         effect: Effect | None = None
         code: CodeSpec | None = None
-        if hit is not None and rng.random() < hit.spec.fail_prob:
-            effect = hit.spec.effect
+        if hit is not None and hit.spec.effect == "drop":
+            hit = None
+        if hit is not None and (repeat is not None or rng.random() < hit.spec.fail_prob):
+            effect = "fail" if hit.spec.effect == "repeat" else hit.spec.effect
             if effect == "fail":
                 pool = hit.codes_at(t0)
                 code = rng.choices(pool, [c.weight for c in pool])[0]
@@ -523,6 +605,7 @@ def simulate_transactions(
         telemetry=build_telemetry(
             profile, common.ambient_temp_c, world, cabinet_code, instances, txns
         ),
+        dropped=dict(dropped),
     )
 
 
@@ -641,6 +724,45 @@ def build_telemetry(
     return slots_df.sort(["heartbeat_at", "cabinet_id", "slot_id"], nulls_last=False)
 
 
+def scenario_instances_frame(result: TxnResult, profile: ProfileSpec) -> pl.DataFrame:
+    """Đáp án mức lần lặp kịch bản (cho đối tác ở I1): thời gian, phạm vi, mã vận hành.
+
+    `n_affected`: số giao dịch thuộc lần lặp (kịch bản `drop`: số giao dịch bị mất).
+    """
+    st_code = {c.station_id: c.station_code for c in result.cabinet_codes}
+    cab_code = {c.cabinet_id: c.cabinet_code for c in result.cabinet_codes}
+    affected = Counter(
+        g.scenario_instance_id for g in result.ground_truth if g.scenario_instance_id
+    )
+    failures = Counter(
+        g.scenario_instance_id
+        for g in result.ground_truth
+        if g.scenario_instance_id and g.is_failure
+    )
+    rows = sorted(result.instances, key=lambda i: (i.start, i.instance_id))
+    return pl.DataFrame(
+        {
+            "scenario_instance_id": [i.instance_id for i in rows],
+            "scenario": [i.spec.name for i in rows],
+            "scope": [i.spec.scope for i in rows],
+            "effect": [i.spec.effect for i in rows],
+            "is_failure": [i.spec.is_failure for i in rows],
+            "start": [i.start for i in rows],
+            "end": [i.end for i in rows],
+            "station_id": [st_code.get(i.station_id or "") for i in rows],
+            "cabinet_id": [cab_code.get(i.cabinet_id or "") for i in rows],
+            "province": [i.province for i in rows],
+            "country": [i.country or "VN" for i in rows],
+            "split": [profile.split.split_for(i.day_index) for i in rows],
+            "n_affected": [
+                affected[i.instance_id] + result.dropped.get(i.instance_id, 0) for i in rows
+            ],
+            "n_failures": [failures[i.instance_id] for i in rows],
+        },
+        schema_overrides={"province": pl.String, "station_id": pl.String, "cabinet_id": pl.String},
+    )
+
+
 def check_transactions(profile_name: str, result: TxnResult, table: ErrorTable) -> None:
     """Bất biến của mock; `eval` còn phải đủ số lần lặp trong tập test (CLAUDE.md §10)."""
     ids = [t.emsp_txn_id for t in result.transactions]
@@ -693,19 +815,21 @@ async def generate_transactions(
         result.telemetry.write_parquet(out_dir / TXN_TELEMETRY_FILE)
         gt_path = out_dir / TXN_GROUND_TRUTH
         _frame(result.ground_truth).write_csv(gt_path)
+        inst_path = out_dir / TXN_SCENARIO_INSTANCES
+        scenario_instances_frame(result, profile).write_csv(inst_path)
         return {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in (*paths, gt_path)
+            for p in (*paths, gt_path, inst_path)
             if p.suffix != ".parquet"  # parquet không ổn định từng byte giữa các phiên bản
         }
 
+    profile = profiles.profiles[profile_name]
     sha = await asyncio.to_thread(write)
     failures = [g for g in result.ground_truth if g.is_failure]
     by_scenario = Counter(f"{g.scenario or 'background'}|{g.split}" for g in failures)
     affected = Counter(
         g.scenario_instance_id for g in result.ground_truth if g.scenario_instance_id
     )
-    profile = profiles.profiles[profile_name]
     manifest = TxnManifest(
         profile=profile_name,
         seed=profile.seed,
@@ -714,7 +838,10 @@ async def generate_transactions(
         n_failures=len(failures),
         sha256=sha,
         by_scenario=dict(sorted(by_scenario.items())),
-        instances={i.instance_id: affected.get(i.instance_id, 0) for i in result.instances},
+        instances={
+            i.instance_id: affected.get(i.instance_id, 0) + result.dropped.get(i.instance_id, 0)
+            for i in result.instances
+        },
     )
     (out_dir / TXN_MANIFEST).write_bytes(
         orjson.dumps(manifest.model_dump(mode="json"), option=orjson.OPT_INDENT_2) + b"\n"

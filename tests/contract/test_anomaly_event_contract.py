@@ -13,10 +13,12 @@ from ase.contracts.anomaly_event import AnomalyEvent, json_schema
 ROOT = Path(__file__).resolve().parents[2] / "contracts"
 
 
-@pytest.mark.parametrize("name", ["transaction_incident", "baseline", "behavior"])
+@pytest.mark.parametrize(
+    "name", ["transaction_incident", "baseline", "baseline_province", "behavior"]
+)
 def test_fixtures_validate(name: str) -> None:
     ev = AnomalyEvent.model_validate_json((ROOT / "fixtures" / f"{name}.json").read_bytes())
-    assert ev.kind == name
+    assert ev.kind == name.split("_province")[0]
 
 
 def test_committed_schema_matches_model() -> None:

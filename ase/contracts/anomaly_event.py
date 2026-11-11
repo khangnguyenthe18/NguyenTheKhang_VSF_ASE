@@ -2,8 +2,9 @@
 
 Một schema cho cả hai chiều (mentor yêu cầu ở đánh giá Gate 0):
 - `transaction_incident` (ASE → Nhân): sự cố gộp từ Danh sách giao dịch đổi pin.
-- `baseline` (ASE → Nhân): mức nền theo trạm × khung giờ (số giao dịch, tỷ lệ lỗi, health score)
-  để Nhân làm ngưỡng cho cảnh báo "sụt giảm theo khung giờ".
+- `baseline` (ASE → Nhân): mức nền theo tỉnh × giờ hoặc trạm × ngày (số giao dịch, tỷ lệ lỗi,
+  health score) để Nhân làm ngưỡng cho cảnh báo "sụt giảm theo khung giờ" (v0.2: trạm × giờ quá
+  thưa ở mật độ thật).
 - `behavior` (Nhân → ASE): hành vi bất thường trên log (VinSOC scan, request lặp lại, sụt traffic,
   latency tăng dần sau deploy). ASE dùng làm bằng chứng `BHV-*` cho sự cố và open point.
 Quy tắc: thêm field = không phá vỡ (consumer bỏ qua field lạ); đổi/xoá field = tăng major, cả hai
@@ -32,6 +33,9 @@ class Scope(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     country: str = "VN"
+    # Mã tỉnh trong mã trạm (vd `HCM`). Thêm ở contract v0.2 (trường tuỳ chọn, không phá vỡ):
+    # mật độ thật ~0,5 GD/giờ/trạm nên mức nền và cảnh báo sụt traffic tính theo tỉnh × giờ.
+    province: str | None = None
     station_id: str | None = None  # mã trạm vận hành, vd B.HCM01234
     cabinet_id: str | None = None  # mã tủ, vd B.HCM01234.002
     connector: str | None = None

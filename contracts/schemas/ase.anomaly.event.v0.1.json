@@ -63,6 +63,18 @@
           "title": "Country",
           "type": "string"
         },
+        "province": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Province"
+        },
         "station_id": {
           "anyOf": [
             {

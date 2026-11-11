@@ -565,3 +565,33 @@ def test_masked_site_codes_hide_real_codes_but_keep_province_and_traffic() -> No
     assert (
         masked.transactions == simulate_transactions("smoke", profiles=masked_profiles).transactions
     )
+
+
+def test_pair_profile_has_partner_scenarios_and_instance_answer_key() -> None:
+    """Bộ dữ liệu dùng chung (I1): sụt traffic theo tỉnh, request lặp lại; đáp án mức lần lặp."""
+    from ase.simulator.profiles import load_profiles
+    from ase.simulator.real_sites import load_real_sites
+    from ase.simulator.txn_generator import scenario_instances_frame
+
+    if not load_real_sites():
+        pytest.skip("chưa có vinfast_bss.json.gz (dữ liệu ngoài, không commit)")
+    res = simulate_transactions("pair")
+    by_id = {t.emsp_txn_id: t for t in res.transactions}
+    groups: dict[str, list[SwapTransaction]] = {}
+    for g in res.ground_truth:
+        if g.scenario == "repeated_request" and g.scenario_instance_id:
+            groups.setdefault(g.scenario_instance_id, []).append(by_id[g.emsp_txn_id])
+    assert len(groups) == 6
+    for txns in groups.values():
+        assert 5 <= len(txns) <= 9
+        assert len({t.user_id for t in txns}) == 1 and len({t.cabinet_id for t in txns}) == 1
+        assert all(t.status is TxnStatus.FAILED and t.error_code == "D6031" for t in txns)
+    drops = [i for i in res.instances if i.spec.name == "traffic_drop"]
+    assert len(drops) == 6 and all(res.dropped.get(i.instance_id, 0) > 0 for i in drops)
+    frame = scenario_instances_frame(res, load_profiles().profiles["pair"])
+    assert frame.height == len(res.instances)
+    assert {"scenario_instance_id", "start", "end", "station_id", "province", "split"} <= set(
+        frame.columns
+    )
+    drop_rows = frame.filter(pl.col("scenario") == "traffic_drop")
+    assert drop_rows["province"].null_count() == 0 and not drop_rows["is_failure"].any()

@@ -30,14 +30,14 @@ scenarios:
     duration_minutes: 4320
     fail_prob: 0.6
     codes: [{code: B6000}, {code: C6029, after_battery_in: true}]
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
   - name: grid_power_loss          # mất điện lưới tại một trạm
     scope: station
     duration_minutes: 1440
     fail_prob: 0.9
     sequence: true
     codes: [{code: A0122}, {code: B6025}]
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
   - name: cabinet_overheat_smoke   # tủ quá nhiệt rồi báo khói
     scope: cabinet
     duration_minutes: 1440
@@ -45,48 +45,66 @@ scenarios:
     sequence: true
     codes: [{code: A6009}, {code: A0110}]
     overheat_temp_c: [57, 66]      # telemetry: nhiệt độ tủ tăng dần trong lúc sự cố
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
   - name: payment_callback_outage  # cổng thanh toán ngừng: callback lỗi ở nhiều trạm VN
     scope: country
     country: VN
     duration_minutes: 25
     fail_prob: 0.85
     codes: [{code: D6036, weight: 2}, {code: D6037, weight: 1}]
-    occurrences: {smoke: 0, dev: 2, eval: 4, demo: 2}
+    occurrences: {smoke: 0, dev: 2, eval: 4, pair: 4, demo: 2}
   - name: txn_upload_failure       # tủ không gửi được giao dịch lên hệ thống, mọi nước
     scope: global
     duration_minutes: 40
     fail_prob: 0.5
     codes: [{code: B0207}]
-    occurrences: {smoke: 0, dev: 2, eval: 4, demo: 2}
+    occurrences: {smoke: 0, dev: 2, eval: 4, pair: 4, demo: 2}
   - name: battery_lost             # mất pin trong khoang
     scope: cabinet
     duration_minutes: 1440
     fail_prob: 0.6
     codes: [{code: C6100, after_battery_in: true}]
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
   - name: returned_not_received    # khách đã trả pin nhưng không nhận được pin mới
     scope: cabinet
     duration_minutes: 1440
     fail_prob: 0.7
     codes: [{code: D6038, after_battery_in: true}]
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
   - name: stuck_battery_in         # giao dịch kẹt ở "Đưa pin vào", không có mã lỗi
     scope: cabinet
     duration_minutes: 1440
     fail_prob: 0.7
     effect: stuck_battery_in
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
   - name: stuck_created            # giao dịch kẹt ở "Tạo mới", không có mã lỗi
     scope: station
     duration_minutes: 1440
     fail_prob: 0.8
     effect: stuck_created
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
   - name: slow_but_completed       # BẪY: khách thao tác chậm nhưng giao dịch vẫn hoàn thành
     scope: cabinet
     duration_minutes: 1440
     fail_prob: 0.6
     effect: slow
     slow_seconds: [240, 540]
-    occurrences: {smoke: 4, dev: 4, eval: 10, demo: 4}
+    occurrences: {smoke: 4, dev: 4, eval: 10, pair: 10, demo: 4}
+  # --- Chỉ cho bộ dữ liệu dùng chung với đối tác (profile `pair`, điểm tích hợp I1) ---
+  # Hai kịch bản có dấu hiệu trên CẢ log của đối tác lẫn danh sách giao dịch. Thêm ở cuối danh sách
+  # để không đổi lịch các kịch bản cũ; occurrences chỉ có `pair` → `eval`/`dev` không đổi.
+  - name: traffic_drop             # sụt traffic: giao dịch một tỉnh giảm mạnh trong vài giờ
+    scope: province
+    duration_minutes: 180
+    fail_prob: 0.6                 # effect=drop: 60% giao dịch trong khung giờ không xảy ra
+    effect: drop
+    occurrences: {pair: 6}
+  - name: repeated_request         # một khách tạo giao dịch lặp lại liên tục tại một tủ
+    scope: cabinet
+    duration_minutes: 30
+    fail_prob: 1.0
+    effect: repeat
+    repeat_count: [5, 9]
+    repeat_gap_seconds: [60, 180]
+    codes: [{code: D6031}]         # BatteryInTimeout: tạo giao dịch nhưng không đưa pin vào
+    occurrences: {pair: 6}
