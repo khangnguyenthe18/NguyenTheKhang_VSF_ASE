@@ -22,7 +22,9 @@ make report PROFILE=eval FROM=2026-10-01 TO=2026-10-31 TOP=5   # báo cáo thán
 #   → data/eval/reports/*.txt
 ```
 
-Profile: `smoke` (CI, 1 ngày), `dev` (14 ngày, dùng chỉnh rule), `eval` (30 ngày, 10 ngày cuối là tập test), `demo` (286 trạm, chỉ trình diễn).
+Lưu lượng mock bám thực tế: ≈ 2,9 triệu giao dịch/tháng cho các điểm đổi pin VN, phân bổ theo tỉnh/thành (`txn_traffic` trong `ase/simulator/profiles.yaml`). Profile lấy mẫu điểm thật theo tỉnh: `smoke` (150 điểm, 1 ngày, CI), `dev` (450 điểm, 14 ngày, chỉnh rule), `eval` (650 điểm, 30 ngày, 10 ngày cuối là tập test), `demo` (3.000 điểm, 3 ngày, trình diễn), `scale` (toàn quốc, 1 ngày ≈ 96 nghìn giao dịch, chỉ đo hiệu năng: `make sim PROFILE=scale && make agent PROFILE=scale`).
+
+Demo lại từ đầu (sau khi Mailpit khởi động lại): `make notify-reset`. Xem card Teams: `http://localhost:8000/teams`.
 
 ## Xem mail và dashboard
 

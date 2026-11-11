@@ -521,6 +521,8 @@ Ví dụ `ase.anomaly.transaction.v0`:
 
 ## 10. Đặc tả mock data & simulator
 
+> **Từ 11/11 (lưu lượng thực tế):** ≈ 2,9 triệu giao dịch/tháng cho các điểm đổi pin VN, phân bổ theo tỉnh/thành (tỉnh nhiều điểm thì mỗi điểm đông hơn, `txn_traffic` trong `profiles.yaml`); trạm đặt tại điểm thật, lấy mẫu theo tỉnh (`txn_sites`: smoke 150, dev 450, eval 650, demo 3.000; `scale` = toàn quốc 1 ngày, chỉ đo hiệu năng). Bình quân 2–3 GD/điểm/ngày → analyzer cộng dồn lỗi tủ/trạm qua 24 giờ. Bảng profile bên dưới là của pipeline cũ.
+>
 > **Từ 10/11:** simulator sinh thẳng **danh sách giao dịch** (`swap_transactions.{jsonl,parquet}` + `ground_truth.csv`), đúng định dạng màn hình thật: mã trạm `B.<TỈNH><5 số>`, mã tủ `<mã trạm>.<3 số>`, S/N tủ `BSS-…`, loại tủ CC_06_P/CC_12_P, mã eMSP 24 hex, mã trên tủ tăng dần, S/N pin `BAT…`. Lỗi **chỉ dùng mã trong bảng chuẩn** (§6). Kịch bản mới: xem `docs/OPS_AGENT_PLAN.md` (Giai đoạn 1). Các mục về tầng trường T0–T3, bảng event 7 bước và bảng "Scenario inject" bên dưới thuộc pipeline cũ; phần profile quy mô, quốc gia, múi giờ, seed vẫn áp dụng.
 
 - **Tái lập được:** cố định seed; tập test dùng seed khác tập dev.
