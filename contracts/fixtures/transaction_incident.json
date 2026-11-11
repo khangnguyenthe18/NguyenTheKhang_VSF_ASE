@@ -11,7 +11,7 @@
   "metrics": [{"name": "txn_failed", "observed": 44, "unit": "giao dịch"}],
   "related_txn_ids": ["0f1e2d3c4b5a69788796a5b4", "1a2b3c4d5e6f708192a3b4c5"],
   "evidence": ["0f1e2d3c4b5a69788796a5b4"],
-  "summary": "Lan rộng VN: Payment Callback Timeout / Failed ở 5 trạm trong 2 lần quét",
+  "summary": "Lan rộng VN: Payment Callback Timeout / Failed ở 31 trạm trong 2 lần quét",
   "confidence": 0.9,
   "notify": false
 }
