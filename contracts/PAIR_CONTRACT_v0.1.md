@@ -54,8 +54,8 @@ mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test
 | Mục | Chốt |
 |---|---|
 | Phạm vi | **VN** (theo góp ý Gate 0) |
-| Profile | `eval`: 30 ngày (20 nền + 10 test), 11 trạm, ~1.500 giao dịch/ngày, seed 2042 / test 9042 |
-| Lý do không dùng 60 ngày × 8.000 phiên | Chất lượng đánh giá phụ thuộc số case lỗi, không phải tổng số; 30 × 1.500 đủ ≥ 2 lần lặp mỗi kịch bản trong tập test và sinh + quét + báo cáo hết khoảng 15 giây trên laptop |
+| Profile | `eval`: 30 ngày từ 05/10/2026 (20 nền + 10 test), **650 điểm đổi pin VN thật** lấy mẫu theo tỉnh, ~1.450 giao dịch/ngày (đúng mật độ mỗi điểm như thực tế: ≈ 2,9 triệu GD/tháng toàn VN, phân bổ theo tỉnh/thành), seed 2042 / test 9142 |
+| Lý do không dùng 60 ngày × 8.000 phiên | Chất lượng đánh giá phụ thuộc số case lỗi, không phải tổng số; 30 ngày × 650 điểm đủ nhiều lần lặp mỗi kịch bản trong tập test và sinh + quét + báo cáo chạy khoảng 1 phút trên laptop. Cần quy mô toàn quốc thì dùng profile `scale` (toàn bộ điểm, 1 ngày ≈ 96 nghìn GD) |
 | Log của Nhân | Sinh theo cùng seed và cùng mã trạm/tủ/giao dịch của `swap_transactions.parquet`; khối lượng log do Nhân chọn |
 
 ## 5. Mốc tích hợp

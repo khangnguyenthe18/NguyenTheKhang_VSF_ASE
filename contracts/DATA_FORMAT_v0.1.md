@@ -2,7 +2,7 @@
 
 Kèm `PAIR_CONTRACT_v0.1.md`. Mục đích: để log của đối tác dùng **cùng mã trạm / tủ / connector / giao dịch và cùng thời gian** với danh sách giao dịch. File này chỉ mô tả định dạng; kịch bản mock của mỗi bên do bên đó tự làm.
 
-**File:** `data/<profile>/swap_transactions.parquet` (bản JSONL: `swap_transactions.jsonl`, mỗi dòng 1 giao dịch), sinh bằng `make sim PROFILE=<profile>`. Profile dùng chung: `eval` (VN, 11 trạm, 30 ngày từ 05/10/2026, seed 2042). Mọi thời gian là UTC (ISO-8601); giờ hiển thị theo `timezone` của trạm.
+**File:** `data/<profile>/swap_transactions.parquet` (bản JSONL: `swap_transactions.jsonl`, mỗi dòng 1 giao dịch), sinh bằng `make sim PROFILE=<profile>`. Profile dùng chung: `eval` (VN, 650 điểm đổi pin thật, 30 ngày từ 05/10/2026, seed 2042, tập test seed 9142). Mọi thời gian là UTC (ISO-8601); giờ hiển thị theo `timezone` của trạm.
 
 | Cột | Kiểu | Ví dụ | Ghi chú |
 |---|---|---|---|
