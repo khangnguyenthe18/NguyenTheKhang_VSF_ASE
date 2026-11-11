@@ -354,7 +354,7 @@ def test_dashboard_never_reads_ground_truth_csv(
     for url in (
         "/api/dashboard/overview?profile=smoke",
         "/api/dashboard/stations?profile=smoke",
-        "/api/dashboard/stations/VN-ST-001?profile=smoke",
+        f"/api/dashboard/stations/{_first_station(client)}?profile=smoke",
         "/api/dashboard/transactions?profile=smoke",
         "/dashboard?profile=smoke",
         "/dashboard/transactions/export?profile=smoke",
@@ -395,7 +395,7 @@ def test_page_data_json_is_parseable_and_cannot_break_out_of_script(
 
     settings, db_path = smoke_env
     client = TestClient(create_app(db_path=db_path, settings=settings))
-    for page in ("", "/map", "/stations", "/stations/VN-ST-001"):
+    for page in ("", "/map", "/stations", f"/stations/{_first_station(client)}"):
         html = client.get(f"/dashboard{page}?profile=smoke").text
         m = re.search(r'<script type="application/json" id="page-data">(.*?)</script>', html, re.S)
         assert m is not None, page
@@ -468,6 +468,61 @@ def test_vinfast_bss_api_returns_43297_cabinets(smoke_env: tuple[Settings, Path]
 
 
 # --- 8. Danh sách giao dịch đổi pin ----------------------------------------------------------
+
+
+def test_map_and_stations_pages_use_operational_codes_and_transaction_stats(
+    smoke_env: tuple[Settings, Path],
+) -> None:
+    """Bản đồ, Trạm & Tủ hiện cùng mã (`B.…`) và cùng số liệu với Danh sách giao dịch."""
+    settings, db_path = smoke_env
+    client = TestClient(create_app(db_path=db_path, settings=settings))
+    ov = OverviewResponse.model_validate(client.get("/api/dashboard/overview?profile=smoke").json())
+    assert ov.stations_map and all(s.station_id.startswith("B.") for s in ov.stations_map)
+    stations = StationsListResponse.model_validate(
+        client.get("/api/dashboard/stations?profile=smoke").json()
+    ).stations
+    assert all(s.station_id.startswith("B.") for s in stations)
+    txn_stations = {
+        r.station_id
+        for r in TransactionsPageResponse.model_validate(
+            client.get("/api/dashboard/transactions?profile=smoke&page_size=100").json()
+        ).rows
+    }
+    assert txn_stations <= {s.station_id for s in stations}
+
+    # Lượt đổi hôm nay của trạm = số giao dịch của trạm đó trong danh sách giao dịch
+    data = load_profile_data("smoke", settings=settings)
+    txn = pl.read_parquet(settings.data_dir / "smoke" / "swap_transactions.parquet")
+    assert data.swap_sessions.height == txn.height
+    assert sum(s.swaps_today for s in stations) > 0
+
+    detail = StationDetailResponse.model_validate(
+        client.get(f"/api/dashboard/stations/{stations[0].station_id}?profile=smoke").json()
+    )
+    assert detail.cabinets and all(
+        c.cabinet_id.startswith(stations[0].station_id + ".") for c in detail.cabinets
+    )
+    # Số khoang theo loại tủ: CC_06_P có 6, CC_12_P có 12
+    codes = pl.read_parquet(settings.data_dir / "smoke" / "station_codes.parquet")
+    n_by_type = {"CC_06_P": 6, "CC_12_P": 12}
+    expected = {
+        c: n_by_type[t] for c, t in zip(codes["cabinet_code"], codes["cabinet_type"], strict=True)
+    }
+    for st in stations:
+        d = StationDetailResponse.model_validate(
+            client.get(f"/api/dashboard/stations/{st.station_id}?profile=smoke").json()
+        )
+        for cab in d.cabinets:
+            assert len(cab.slots) == expected[cab.cabinet_id], cab.cabinet_id
+    assert sum(s.total_slots for s in stations) == sum(expected.values())
+    html = client.get(f"/dashboard/stations/{stations[0].station_id}?profile=smoke").text
+    assert "VN-ST-" not in html and "-CAB-" not in html
+    assert client.get("/dashboard/stations/VN-ST-001?profile=smoke").status_code == 404
+
+
+def _first_station(client: TestClient) -> str:
+    listing = client.get("/api/dashboard/stations?profile=smoke").json()
+    return str(listing["stations"][0]["station_id"])
 
 
 def _smoke_data(settings: Settings) -> ProfileData:

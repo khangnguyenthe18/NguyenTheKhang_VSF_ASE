@@ -49,8 +49,9 @@ from ase.dashboard.models import (
     StationsListResponse,
     StationSummaryRow,
 )
-from ase.knowledge.loader import Knowledge, default_knowledge
+from ase.knowledge.loader import Knowledge, default_error_table, default_knowledge
 
+NO_ERROR_CODE = "không có mã lỗi"
 READY_BATTERY_APPROX_NOTE = (
     "Xấp xỉ: SOC hiện tại được ước lượng = SOC của lần đọc telemetry cuối + tốc độ sạc giả định "
     "(ASE_BATTERY_CHARGE_RATE_PCT_PER_HOUR) x thời gian đã qua; khoang sẵn sàng khi ước lượng "
@@ -636,7 +637,7 @@ def build_station_detail(
 
     tz = station_row.timezone
     thresholds = k.error_catalog.thresholds
-    by_code = k.error_catalog.by_code
+    error_table = default_error_table()
     cab_online_map = compute_cabinet_online_map(
         data.cabinets,
         data.cabinet_telemetry,
@@ -731,19 +732,19 @@ def build_station_detail(
                 hw_err = str(t_info["hw_error_code"]) if t_info.get("hw_error_code") else None
                 assumed = False
 
+            # Lý do lỗi gần nhất của khoang: mã của bảng mã lỗi chuẩn, tên cảnh báo tra từ bảng.
             recent_err: str | None = None
             if ev_info is not None and str(ev_info.get("status")) in ("FAILED", "TIMEOUT"):
                 recent_err = (
                     str(ev_info["error_code"])
                     if ev_info.get("error_code")
-                    else last_fail_code_by_slot.get(key, "STEP_FAILED")
+                    else last_fail_code_by_slot.get(key, NO_ERROR_CODE)
                 )
             elif f_24h > 0:
-                recent_err = last_fail_code_by_slot.get(key, "SLOT_DOOR_JAM")
+                recent_err = last_fail_code_by_slot.get(key, NO_ERROR_CODE)
 
-            recent_desc = (
-                by_code[recent_err].description if recent_err and recent_err in by_code else None
-            )
+            table_row = error_table.lookup(recent_err)
+            recent_desc = table_row.name if table_row else None
 
             if (temp is not None and temp > thresholds.temp_warn_1_c) or (
                 hw_err in (thresholds.hw_warn_level_1_code, thresholds.hw_warn_level_2_code)

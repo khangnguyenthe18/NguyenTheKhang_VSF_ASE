@@ -43,10 +43,11 @@ scenarios:
     fail_prob: 0.9
     sequence: true
     codes: [{code: A6009}, {code: A0110}]
+    overheat_temp_c: [57, 66]      # telemetry: nhiệt độ tủ tăng dần trong lúc sự cố
     occurrences: {smoke: 1, dev: 2, eval: 4, demo: 2}
-  - name: wallet_down_ph           # ví điện tử PH ngừng: callback thanh toán lỗi, chỉ PH
+  - name: payment_callback_outage  # cổng thanh toán ngừng: callback lỗi ở nhiều trạm VN
     scope: country
-    country: PH
+    country: VN
     duration_minutes: 25
     fail_prob: 0.85
     codes: [{code: D6036, weight: 2}, {code: D6037, weight: 1}]

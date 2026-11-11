@@ -76,6 +76,15 @@ class ProfileSpec(_Strict):
     # lớn để giảm dung lượng: heartbeat vẫn 1 phút vì detector (gap 120 s) và dashboard
     # (online 2 phút) giả định chu kỳ này.
     telemetry_jsonl: bool = True
+    # Danh sách giao dịch (agent quét 30 phút) chỉ mô phỏng VN theo góp ý Gate 0 của mentor.
+    # Pipeline event 7 bước cũ (đóng băng) vẫn dùng `stations` 3 nước. None → dùng `stations`.
+    txn_stations: dict[str, int] | None = None
+
+    def for_transactions(self) -> ProfileSpec:
+        """Bản profile dùng cho simulator danh sách giao dịch (số trạm theo `txn_stations`)."""
+        if self.txn_stations is None:
+            return self
+        return self.model_copy(update={"stations": self.txn_stations})
 
     def seed_for_day(self, day_index: int) -> int:
         """Ngày thuộc tập test dùng `test_seed` (khác seed dev) để tránh overfit."""

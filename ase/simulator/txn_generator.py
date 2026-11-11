@@ -21,10 +21,11 @@ from pathlib import Path
 from typing import Literal
 
 import orjson
+import polars as pl
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ase.common.models import SwapTransaction, TxnGroundTruthRow, TxnStatus
+from ase.common.models import Station, SwapTransaction, TxnGroundTruthRow, TxnStatus
 from ase.knowledge.loader import ErrorTable, Knowledge, default_error_table, default_knowledge
 from ase.simulator.checks import SimulationCheckError
 from ase.simulator.entities import USER_NORMAL, CabinetInfo, World, build_world
@@ -37,6 +38,9 @@ TXN_SCENARIOS_PATH = Path(__file__).resolve().parent / "txn_scenarios.yaml"
 TRANSACTIONS_TABLE = "swap_transactions"
 TXN_GROUND_TRUTH = "txn_ground_truth.csv"
 TXN_MANIFEST = "txn_manifest.json"
+STATION_CODES_TABLE = "station_codes"
+TXN_STATIONS_TABLE = "txn_stations"
+TXN_TELEMETRY_FILE = "txn_telemetry.parquet"
 
 # Mã tỉnh giả cho mã trạm `B.<TỈNH><5 số>`; ID chọn theo múi giờ (WIB / WITA).
 _PROVINCES: dict[str, list[str]] = {"VN": ["HNO", "HCM", "DNG", "HPG", "QNI"], "PH": ["MNL", "CEB"]}
@@ -80,6 +84,7 @@ class TxnScenarioSpec(_Strict):
     sequence: bool = False
     codes: list[CodeSpec] = Field(default_factory=list)
     slow_seconds: tuple[int, int] | None = None
+    overheat_temp_c: tuple[float, float] | None = None  # nhiệt độ tủ (telemetry) khi sự cố
     occurrences: dict[str, int]
 
     @model_validator(mode="after")
@@ -148,11 +153,28 @@ class TxnManifest(BaseModel):
     instances: dict[str, int]  # scenario_instance_id → số giao dịch bị ảnh hưởng
 
 
+class CabinetCodeRow(BaseModel):
+    """Ánh xạ mã nội bộ của simulator → mã vận hành như màn hình thật (1 dòng/tủ).
+
+    Dashboard dùng bảng này để trang Bản đồ và Trạm & Tủ hiện cùng mã với Danh sách giao dịch.
+    """
+
+    station_id: str
+    station_code: str
+    cabinet_id: str
+    cabinet_code: str
+    cabinet_serial: str
+    cabinet_type: str
+
+
 @dataclass(frozen=True)
 class TxnResult:
     transactions: list[SwapTransaction]
     ground_truth: list[TxnGroundTruthRow]
     instances: list[ScenarioInstance]
+    cabinet_codes: list[CabinetCodeRow]
+    stations: list[Station]  # trạm của thế giới danh sách giao dịch, mã nội bộ
+    telemetry: pl.DataFrame  # schema của `CabinetTelemetry`, mã tủ vận hành
 
 
 def _hex(seed: int, *keys: object, n: int) -> str:
@@ -251,7 +273,7 @@ def simulate_transactions(
     if unknown:
         raise SimulationCheckError(f"mã không có trong bảng mã lỗi chuẩn: {sorted(unknown)}")
 
-    profile, common = profiles.profiles[profile_name], profiles.common
+    profile, common = profiles.profiles[profile_name].for_transactions(), profiles.common
     seed = profile.seed
     world = build_world(profile, common, knowledge)
     codes = station_codes(world, seed)
@@ -365,7 +387,120 @@ def simulate_transactions(
                 split=profile.split.split_for(arr.day_index),
             )
         )
-    return TxnResult(transactions=txns, ground_truth=truth, instances=instances)
+    cabinet_codes = [
+        CabinetCodeRow(
+            station_id=st.station_id,
+            station_code=codes[st.station_id],
+            cabinet_id=c.cabinet_id,
+            cabinet_code=cabinet_code[c.cabinet_id],
+            cabinet_serial=cabinet_sn[c.cabinet_id],
+            cabinet_type=cabinet_type[c.cabinet_id],
+        )
+        for st in world.stations
+        for c in world.cabinets_of_station[st.station_id]
+    ]
+    return TxnResult(
+        transactions=txns,
+        ground_truth=truth,
+        instances=instances,
+        cabinet_codes=cabinet_codes,
+        stations=list(world.stations),
+        telemetry=build_telemetry(
+            profile, common.ambient_temp_c, world, cabinet_code, instances, txns
+        ),
+    )
+
+
+def slot_id_of(connector: int | str) -> str:
+    """Connector 1..12 → mã khoang 2 chữ số (`01`..`12`) dùng trong telemetry và trang trạm."""
+    return f"{int(connector):02d}"
+
+
+def build_telemetry(
+    profile: ProfileSpec,
+    ambient: tuple[float, float],
+    world: World,
+    cabinet_code: dict[str, str],
+    instances: list[ScenarioInstance],
+    txns: list[SwapTransaction],
+) -> pl.DataFrame:
+    """Telemetry khớp với danh sách giao dịch: heartbeat 1 phút/tủ + khoang quanh từng giao dịch.
+
+    Vì sao dựng bằng cột thay vì model từng dòng: profile `demo` có hàng triệu heartbeat.
+    Kịch bản có `overheat_temp_c` làm nhiệt độ tủ tăng dần trong đúng khoảng thời gian sự cố.
+    """
+    cab_ids: list[str] = []
+    slot_ids: list[str | None] = []
+    doors: list[str | None] = []
+    detected: list[bool | None] = []
+    socs: list[float | None] = []
+    temps: list[float] = []
+    times: list[datetime] = []
+    base_temp: dict[str, float] = {}
+    minutes = profile.days * 24 * 60
+    for cab in world.cabinets:
+        code = cabinet_code[cab.cabinet_id]
+        rng = substream(profile.seed, "txn_heartbeat", cab.cabinet_id)
+        base = rng.uniform(*ambient)
+        base_temp[code] = base
+        start = local_day_start_utc(profile, cab.timezone, 0)
+        hot = [i for i in instances if i.cabinet_id == cab.cabinet_id and i.spec.overheat_temp_c]
+        for m in range(minutes):
+            at_min = start + timedelta(minutes=m)
+            temp = base + rng.gauss(0, 0.8)
+            for i in hot:
+                if i.start <= at_min < i.end and i.spec.overheat_temp_c:
+                    lo, hi = i.spec.overheat_temp_c
+                    temp = (
+                        lo
+                        + (hi - lo) * ((at_min - i.start) / (i.end - i.start))
+                        + rng.gauss(0, 0.5)
+                    )
+            cab_ids.append(code)
+            slot_ids.append(None)
+            doors.append(None)
+            detected.append(None)
+            socs.append(None)
+            temps.append(round(temp, 1))
+            times.append(at_min)
+    for txn in txns:
+        assert txn.cabinet_id is not None
+        events: list[tuple[str | None, datetime | None, bool, float | None]] = [
+            (txn.slot_in, txn.battery_in_at, True, txn.soc_in),  # pin cũ vào khoang, bắt đầu sạc
+            (txn.slot_out, txn.battery_out_at, False, None),  # pin mới rời khoang
+        ]
+        for slot, at, has_battery, soc in events:
+            if slot is None or at is None:
+                continue
+            cab_ids.append(txn.cabinet_id)
+            slot_ids.append(slot_id_of(slot))
+            doors.append("CLOSED")
+            detected.append(has_battery)
+            socs.append(soc)
+            temps.append(round(base_temp[txn.cabinet_id], 1))
+            times.append(at)
+    return pl.DataFrame(
+        {
+            "cabinet_id": cab_ids,
+            "slot_id": slot_ids,
+            "door_state": doors,
+            "battery_detected": detected,
+            "soc": socs,
+            "temperature": temps,
+            "heartbeat_at": times,
+            "hw_error_code": [None] * len(times),
+        },
+        schema={
+            "cabinet_id": pl.String,
+            "slot_id": pl.String,
+            "door_state": pl.String,
+            "battery_detected": pl.Boolean,
+            "soc": pl.Float64,
+            "temperature": pl.Float64,
+            "heartbeat_at": pl.Datetime("us", "UTC"),
+            "hw_error_code": pl.String,
+        },
+    ).sort(["heartbeat_at", "cabinet_id", "slot_id"], nulls_last=False)
 
 
 def check_transactions(profile_name: str, result: TxnResult, table: ErrorTable) -> None:
@@ -415,6 +550,9 @@ async def generate_transactions(
     def write() -> dict[str, str]:
         out_dir.mkdir(parents=True, exist_ok=True)
         paths = _write_table(out_dir, TRANSACTIONS_TABLE, result.transactions, jsonl=True)
+        _write_table(out_dir, STATION_CODES_TABLE, result.cabinet_codes, jsonl=False)
+        _write_table(out_dir, TXN_STATIONS_TABLE, result.stations, jsonl=False)
+        result.telemetry.write_parquet(out_dir / TXN_TELEMETRY_FILE)
         gt_path = out_dir / TXN_GROUND_TRUTH
         _frame(result.ground_truth).write_csv(gt_path)
         return {

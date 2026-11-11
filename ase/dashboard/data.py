@@ -16,7 +16,12 @@ from pathlib import Path
 
 import polars as pl
 
+from ase.agent.source import TRANSACTIONS_FILE, load_transactions
 from ase.common.config import Settings, get_settings
+
+STATION_CODES_FILE = "station_codes.parquet"
+TXN_TELEMETRY_FILE = "txn_telemetry.parquet"
+TXN_STATIONS_FILE = "txn_stations.parquet"
 
 SWAP_EVENT_SCHEMA: dict[str, pl.DataType] = {
     "event_id": pl.String(),
@@ -81,13 +86,16 @@ def available_profiles(settings: Settings | None = None) -> list[str]:
 
 
 def _manifest_mtime(profile_dir: Path) -> float:
-    manifest_path = profile_dir / "manifest.json"
-    if manifest_path.exists():
-        return manifest_path.stat().st_mtime
-    stations_path = profile_dir / "stations.parquet"
-    if stations_path.exists():
-        return stations_path.stat().st_mtime
-    raise FileNotFoundError(f"Không tìm thấy dữ liệu profile tại {profile_dir}")
+    """Dấu thời gian để làm mới cache: file mới nhất trong manifest và danh sách giao dịch."""
+    candidates = [
+        profile_dir / "manifest.json",
+        profile_dir / "stations.parquet",
+        profile_dir / TRANSACTIONS_FILE,
+    ]
+    mtimes = [p.stat().st_mtime for p in candidates if p.exists()]
+    if not mtimes:
+        raise FileNotFoundError(f"Không tìm thấy dữ liệu profile tại {profile_dir}")
+    return max(mtimes)
 
 
 def _ensure_utc_col(df: pl.DataFrame, col: str) -> pl.DataFrame:
@@ -185,6 +193,19 @@ def load_profile_data(
             if isinstance(in_win_max, datetime):
                 default_as_of = in_win_max.astimezone(UTC)
 
+    if (profile_dir / STATION_CODES_FILE).exists() and (profile_dir / TRANSACTIONS_FILE).exists():
+        stations, cabinets, slots, cabinet_telemetry, swap_sessions, swap_events = (
+            _with_operational_codes(
+                profile_dir, stations, cabinets, slots, cabinet_telemetry, swap_events
+            )
+        )
+        # Phạm vi as_of theo danh sách giao dịch: bắt đầu giao dịch đầu tiên → lần đổi trạng thái
+        # cuối; mặc định = lần đổi trạng thái cuối (mọi giao dịch đã có trạng thái cuối).
+        lo, hi = swap_sessions["started_at"].min(), swap_sessions["ended_at"].max()
+        if isinstance(lo, datetime) and isinstance(hi, datetime):
+            min_time, max_time = lo.astimezone(UTC), hi.astimezone(UTC)
+            default_as_of = max_time
+
     loaded = ProfileData(
         profile=profile,
         profile_dir=profile_dir,
@@ -204,6 +225,122 @@ def load_profile_data(
     )
     _PROFILE_CACHE[profile_dir] = loaded
     return loaded
+
+
+def _with_operational_codes(
+    profile_dir: Path,
+    stations: pl.DataFrame,
+    cabinets: pl.DataFrame,
+    slots: pl.DataFrame,
+    telemetry: pl.DataFrame,
+    events: pl.DataFrame,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """Đưa trang Bản đồ và Trạm & Tủ về cùng mã và cùng số liệu với Danh sách giao dịch.
+
+    - Mã trạm/tủ nội bộ (`VN-ST-001`, `…-CAB-01`) đổi sang mã vận hành (`B.HCM01234`, `.001`)
+      theo `station_codes.parquet` do simulator ghi.
+    - Lượt đổi, tỷ lệ lỗi và lỗi theo khoang lấy từ `swap_transactions.parquet` thay cho phiên /
+      event 7 bước cũ, nên lý do lỗi hiển thị là mã của bảng mã lỗi chuẩn.
+    - Telemetry (heartbeat, nhiệt độ, SOC khoang) lấy từ `txn_telemetry.parquet`, sinh khớp với
+      danh sách giao dịch; số khoang của mỗi tủ theo loại tủ (CC_06_P: 6, CC_12_P: 12).
+    """
+    codes = pl.read_parquet(profile_dir / STATION_CODES_FILE)
+    st_map = dict(zip(codes["station_id"], codes["station_code"], strict=True))
+    cab_map = dict(zip(codes["cabinet_id"], codes["cabinet_code"], strict=True))
+
+    def recode(df: pl.DataFrame) -> pl.DataFrame:
+        exprs = []
+        if "station_id" in df.columns:
+            exprs.append(pl.col("station_id").replace(st_map))
+        if "cabinet_id" in df.columns:
+            exprs.append(pl.col("cabinet_id").replace(cab_map))
+        return df.with_columns(exprs)
+
+    # Trạm/tủ/khoang lấy từ thế giới của danh sách giao dịch (chỉ VN), không từ pipeline cũ.
+    txn_stations_path = profile_dir / TXN_STATIONS_FILE
+    if txn_stations_path.exists():
+        stations = recode(pl.read_parquet(txn_stations_path))
+    else:
+        stations = recode(stations).filter(pl.col("station_id").is_in(list(st_map.values())))
+    if "lat" not in stations.columns:
+        stations = stations.with_columns(pl.lit(0.0).alias("lat"), pl.lit(0.0).alias("lon"))
+    station_info = stations.select("station_id", "country", "timezone", "model_gen", "install_date")
+    cabinets = (
+        codes.select(
+            pl.col("cabinet_code").alias("cabinet_id"), pl.col("station_code").alias("station_id")
+        )
+        .join(station_info, on="station_id", how="left")
+        .select(cabinets.columns)
+    )
+    telemetry_path = profile_dir / TXN_TELEMETRY_FILE
+    if telemetry_path.exists():
+        telemetry = pl.read_parquet(telemetry_path).sort("heartbeat_at")
+    else:  # dữ liệu sinh trước khi có telemetry theo giao dịch: dùng tạm telemetry cũ
+        telemetry = recode(telemetry).with_columns(
+            pl.lit(None, dtype=pl.String).alias("hw_error_code")
+        )
+    # Khoang theo loại tủ: CC_06_P có 6 connector, CC_12_P có 12 (mã khoang `01`..`12`).
+    n_slots = pl.col("cabinet_type").str.extract(r"CC_(\d+)_P", 1).cast(pl.Int64)
+    slots = (
+        codes.select(
+            pl.col("station_code").alias("station_id"),
+            pl.col("cabinet_code").alias("cabinet_id"),
+            pl.int_ranges(1, n_slots + 1).alias("slot_no"),
+        )
+        .explode("slot_no")
+        .with_columns(pl.col("slot_no").cast(pl.String).str.zfill(2).alias("slot_id"))
+        .join(station_info, on="station_id", how="left")
+        .select(slots.columns)
+    )
+
+    txn = load_transactions(profile_dir)
+    sessions = txn.select(
+        pl.col("emsp_txn_id").alias("session_id"),
+        "user_id",
+        "station_id",
+        "cabinet_id",
+        "slot_in",
+        "slot_out",
+        "battery_in_id",
+        "battery_out_id",
+        pl.when(pl.col("status") == "COMPLETED")
+        .then(pl.lit("COMPLETED"))
+        .otherwise(pl.lit("FAILED"))
+        .alias("final_status"),
+        "started_at",
+        pl.col("updated_at").alias("ended_at"),
+    )
+
+    def slot_events(slot_col: str, time_col: str, step: str, failed: bool) -> pl.DataFrame:
+        """Mỗi lần một khoang được dùng trong giao dịch → 1 event (để đếm lỗi theo khoang)."""
+        is_failed = pl.col("status") == "FAILED"
+        rows = txn.filter(pl.col(slot_col).is_not_null() & (is_failed if failed else ~is_failed))
+        return rows.select(
+            (pl.col("emsp_txn_id") + f"-{step[0]}").alias("event_id"),
+            pl.col("emsp_txn_id").alias("session_id"),
+            "station_id",
+            "cabinet_id",
+            pl.col(slot_col).str.zfill(2).alias("slot_id"),
+            pl.lit(step).alias("step"),
+            pl.lit("FAILED" if failed else "OK").alias("status"),
+            (pl.col("error_code") if failed else pl.lit(None, dtype=pl.String)).alias("error_code"),
+            pl.lit(None, dtype=pl.String).alias("error_message"),
+            pl.lit(None, dtype=pl.Int64).alias("latency_ms"),
+            pl.col("updated_at" if failed else time_col).alias("occurred_at"),
+        )
+
+    new_events = (
+        pl.concat(
+            [
+                slot_events("slot_in", "battery_in_at", "6_return_battery", failed=False),
+                slot_events("slot_out", "battery_out_at", "7_receive_battery", failed=False),
+                slot_events("slot_in", "battery_in_at", "6_return_battery", failed=True),
+            ]
+        )
+        .select(events.columns)
+        .sort(["occurred_at", "event_id"])
+    )
+    return stations, cabinets, slots, telemetry, sessions, new_events
 
 
 def read_notifier_sqlite(db_path: Path) -> NotifierSnapshot:
