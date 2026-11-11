@@ -515,3 +515,18 @@ def test_analyzer_accumulates_sparse_cabinet_failures_across_scans() -> None:
     b.analyze(T0, _result([_det(10, "D6038")], per_cabinet=1))
     late = T0 + timedelta(minutes=SPEC.local_window_minutes + 30)
     assert b.analyze(late, _result([_det(11, "D6038", at=late)], per_cabinet=1)) == []
+
+
+def test_station_outage_seen_at_two_cabinets_hours_apart_is_one_incident() -> None:
+    """Mất điện cả trạm lộ ra ở tủ .001 rồi .002 sau vài giờ → một sự cố mức trạm."""
+    a = Analyzer(SPEC)
+    (first,) = a.analyze(T0, _result([_det(1, "A0122", cab="001")], per_cabinet=1))
+    assert first.kind == "CABINET"
+    t1 = T0 + timedelta(hours=5)
+    (second,) = a.analyze(t1, _result([_det(2, "A0122", cab="002", at=t1)], per_cabinet=1))
+    assert second.incident_id == first.incident_id
+    assert second.kind == "STATION" and second.scope == "B.TST00001"
+    # Lỗi tiếp theo ở tủ .001 vẫn vào cùng sự cố
+    t2 = t1 + timedelta(hours=5)
+    (third,) = a.analyze(t2, _result([_det(3, "B6025", cab="001", at=t2)], per_cabinet=1))
+    assert third.incident_id == first.incident_id

@@ -105,7 +105,7 @@ profiles:
     telemetry_jsonl: false  # chỉ ghi cabinet_telemetry.parquet (bản JSONL ~0,5 GB, không ai đọc)
   eval:
     seed: 2042
-    test_seed: 9042
+    test_seed: 9142          # tập test mới 11/11 (9042 đã bị xem khi chỉnh rule Gate 1)
     start_date: 2026-10-05
     days: 30                            # 20 baseline + 10 test
     sessions_per_day: 1500

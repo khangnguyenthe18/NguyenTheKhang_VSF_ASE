@@ -229,10 +229,17 @@ class Analyzer:
             key = f"CABINET|{cabinet}"
             hot_ids = {d.emsp_txn_id for d in notable(key, items, s.cabinet_min_txns)}
             picked = [d for d in items if d.emsp_txn_id in hot_ids or joins(key, d)]
-            if picked:
-                take(key, "CABINET", picked)
-                for g in {d.group for d in picked}:
-                    self.rolling.clear(key, g)
+            if not picked:
+                continue
+            target: str = key
+            kind: IncidentKind = "CABINET"
+            if self._active(key, scan_at) is None and hot_ids:
+                promoted = self._promote_to_station(items[0].station_id, key, scan_at)
+                if promoted is not None:
+                    target, kind = promoted, "STATION"
+            take(target, kind, picked)
+            for g in {d.group for d in picked}:
+                self.rolling.clear(key, g)
 
         # Lỗi lẻ còn lại: nhớ trong cửa sổ trượt để lần quét sau cộng dồn.
         for d in rest:
@@ -242,6 +249,23 @@ class Analyzer:
 
         self.baseline.update(scan_at, n_new, Counter(d.group for d in detections))
         return [self._record(scan_at, key, kinds[key], assigned[key]) for key in sorted(assigned)]
+
+    def _promote_to_station(self, station: str, cabinet_key: str, scan_at: datetime) -> str | None:
+        """Tủ khác của cùng trạm đang có sự cố mở → nâng sự cố đó lên mức trạm và trả khoá trạm.
+
+        Vì sao: sự cố cả trạm (vd mất điện) ở mật độ thật lộ ra lần lượt ở từng tủ, cách nhau vài
+        giờ; mỗi tủ mở một sự cố riêng thì một sự cố thật bị tách thành nhiều cảnh báo.
+        """
+        prefix = f"CABINET|{station}."
+        for key, inc in list(self._open.items()):
+            if key.startswith(prefix) and key != cabinet_key and self._active(key, scan_at):
+                station_key = f"STATION|{station}"
+                inc.kind = "STATION"
+                inc.key = station_key
+                self._open[station_key] = inc
+                self._open[cabinet_key] = inc
+                return station_key
+        return None
 
     def _record(
         self, scan_at: datetime, key: str, kind: IncidentKind, found: list[Detection]
