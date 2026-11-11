@@ -94,3 +94,18 @@ def test_simclock_is_set_reflects_whether_clock_was_initialised() -> None:
     assert clock.is_set() is False
     clock.advance(datetime(2026, 11, 4, 10, 0, tzinfo=UTC))
     assert clock.is_set() is True
+
+
+def test_blank_llm_settings_in_env_fall_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`.env` chép từ `.env.example` có các ô LLM để trống: không được làm hỏng cấu hình."""
+    from ase.common.config import Settings
+
+    for key in ("ASE_LLM_PROVIDER", "ASE_LLM_MAX_OUTPUT_TOKENS", "ASE_LLM_BASE_URL",
+                "ASE_LLM_MODEL", "ASE_LLM_API_KEY", "ASE_LLM_TIMEOUT_SECONDS"):  # fmt: skip
+        monkeypatch.setenv(key, "")
+    s = Settings(_env_file=None)
+    assert s.llm_provider == "none" and s.llm_max_output_tokens == 800
+    assert s.llm_base_url is None and s.llm_api_key is None and s.llm_timeout_seconds == 30
+    monkeypatch.setenv("ASE_LLM_PROVIDER", "anthropic")
+    with pytest.warns(UserWarning, match="V-LLM"):
+        assert Settings(_env_file=None).llm_provider == "none"

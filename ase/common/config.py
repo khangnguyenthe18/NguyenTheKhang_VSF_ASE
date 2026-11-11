@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,13 +23,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ASE_", env_file=".env", extra="ignore")
 
     data_dir: Path = ROOT / "data"
-    llm_provider: str = "anthropic"
-    llm_model: str = "claude-haiku-5-5"
+    # LLM: V-LLM nội bộ công ty (mentor không duyệt gửi dữ liệu lên API ngoài, đánh giá Gate 0).
+    # Chạy bất đồng bộ, tách khỏi luồng quét/thông báo; LLM lỗi → gửi bản rule. `none` = rule-only.
+    # Endpoint / model / xác thực của V-LLM chưa có: điền khi mentor cấp.
+    llm_provider: Literal["vllm_internal", "none"] = "none"
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    llm_api_key: SecretStr | None = None
+    llm_timeout_seconds: float = Field(default=30, gt=0)
     triage_mode: str = "single_shot"
-    llm_budget_usd: float = Field(default=30, ge=0)
-    llm_run_budget_usd: float = Field(default=2, ge=0)
     llm_max_output_tokens: int = 800
-    allow_external_llm_on_masked: bool = True
+    # Không bao giờ gửi dữ liệu masked/thật ra dịch vụ LLM bên ngoài công ty.
+    allow_external_llm_on_masked: bool = False
 
     # Notifier settings (NOTIFIER_PLAN §7)
     smtp_host: str = "localhost"
@@ -97,6 +110,31 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             defaults = {"smtp_port": 1025, "mqtt_port": 1883, "mqtt_qos": 1}
             return defaults.get(getattr(info, "field_name", ""), v)
+        return v
+
+    @field_validator(
+        "llm_base_url", "llm_model", "llm_api_key", "llm_timeout_seconds",
+        "llm_max_output_tokens", "triage_mode", mode="before",
+    )  # fmt: skip
+    @classmethod
+    def _blank_llm_field_is_default(cls, v: object, info: ValidationInfo) -> object:
+        """Ô LLM để trống trong `.env` (vd chép từ `.env.example`) → dùng giá trị mặc định."""
+        if isinstance(v, str) and not v.strip():
+            return cls.model_fields[info.field_name or ""].default
+        return v
+
+    @field_validator("llm_provider", mode="before")
+    @classmethod
+    def _legacy_llm_provider(cls, v: object) -> object:
+        """`anthropic` / `ollama` (cấu hình trước 10/11) → `none`: API ngoài không được duyệt."""
+        if isinstance(v, str) and v.strip().lower() in {"", "anthropic", "ollama"}:
+            if v.strip():
+                warnings.warn(
+                    f"ASE_LLM_PROVIDER={v!r} không còn hỗ trợ (chỉ dùng V-LLM nội bộ): "
+                    "chạy rule-only. Sửa .env thành ASE_LLM_PROVIDER=none hoặc vllm_internal.",
+                    stacklevel=2,
+                )
+            return "none"
         return v
 
     @field_validator(
