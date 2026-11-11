@@ -1,0 +1,15 @@
+{
+  "schema_version": "0.1",
+  "event_id": "BHV-20261026-0042",
+  "source": "partner",
+  "kind": "behavior",
+  "detected_at": "2026-10-26T11:18:03Z",
+  "window": {"start": "2026-10-26T11:00:00Z", "end": "2026-10-26T11:15:00Z"},
+  "scope": {"country": "VN", "service": "txn-upload-service"},
+  "metrics": [{"name": "latency_p95_ms", "observed": 2450, "baseline": 180, "unit": "ms", "z_score": 6.1}],
+  "related_txn_ids": [],
+  "summary": "Latency dịch vụ nhận giao dịch tăng dần sau deploy 10:58",
+  "confidence": 0.82,
+  "notify": false,
+  "dashboard_url": "http://localhost:3000/d/ase?from=..."
+}

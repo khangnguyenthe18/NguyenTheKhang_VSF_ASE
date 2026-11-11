@@ -1,0 +1,17 @@
+{
+  "schema_version": "0.1",
+  "event_id": "INC-20261025-0001",
+  "source": "ase",
+  "kind": "transaction_incident",
+  "detected_at": "2026-10-25T11:00:00Z",
+  "window": {"start": "2026-10-25T10:12:41Z", "end": "2026-10-25T10:58:07Z"},
+  "scope": {"country": "VN", "station_id": null, "cabinet_id": null, "service": "payment_callback"},
+  "codes": ["D6036", "D6037"],
+  "level": "Low",
+  "metrics": [{"name": "txn_failed", "observed": 44, "unit": "giao dịch"}],
+  "related_txn_ids": ["0f1e2d3c4b5a69788796a5b4", "1a2b3c4d5e6f708192a3b4c5"],
+  "evidence": ["0f1e2d3c4b5a69788796a5b4"],
+  "summary": "Lan rộng VN: Payment Callback Timeout / Failed ở 5 trạm trong 2 lần quét",
+  "confidence": 0.9,
+  "notify": false
+}

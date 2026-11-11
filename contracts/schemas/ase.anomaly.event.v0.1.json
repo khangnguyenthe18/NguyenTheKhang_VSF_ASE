@@ -1,0 +1,256 @@
+{
+  "$defs": {
+    "Metric": {
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "observed": {
+          "title": "Observed",
+          "type": "number"
+        },
+        "baseline": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Baseline"
+        },
+        "unit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unit"
+        },
+        "z_score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Z Score"
+        }
+      },
+      "required": [
+        "name",
+        "observed"
+      ],
+      "title": "Metric",
+      "type": "object"
+    },
+    "Scope": {
+      "additionalProperties": true,
+      "properties": {
+        "country": {
+          "default": "VN",
+          "title": "Country",
+          "type": "string"
+        },
+        "station_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Station Id"
+        },
+        "cabinet_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cabinet Id"
+        },
+        "connector": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Connector"
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Service"
+        }
+      },
+      "title": "Scope",
+      "type": "object"
+    },
+    "Window": {
+      "additionalProperties": true,
+      "properties": {
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "Window",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "const": "0.1",
+      "default": "0.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "source": {
+      "enum": [
+        "ase",
+        "partner"
+      ],
+      "title": "Source",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "transaction_incident",
+        "baseline",
+        "behavior"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "detected_at": {
+      "format": "date-time",
+      "title": "Detected At",
+      "type": "string"
+    },
+    "window": {
+      "$ref": "#/$defs/Window"
+    },
+    "scope": {
+      "$ref": "#/$defs/Scope"
+    },
+    "codes": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Codes",
+      "type": "array"
+    },
+    "level": {
+      "anyOf": [
+        {
+          "enum": [
+            "High",
+            "Low"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Level"
+    },
+    "metrics": {
+      "items": {
+        "$ref": "#/$defs/Metric"
+      },
+      "title": "Metrics",
+      "type": "array"
+    },
+    "related_txn_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 50,
+      "title": "Related Txn Ids",
+      "type": "array"
+    },
+    "evidence": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 10,
+      "title": "Evidence",
+      "type": "array"
+    },
+    "summary": {
+      "maxLength": 500,
+      "title": "Summary",
+      "type": "string"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "notify": {
+      "default": false,
+      "title": "Notify",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "event_id",
+    "source",
+    "kind",
+    "detected_at",
+    "window",
+    "scope",
+    "summary",
+    "confidence"
+  ],
+  "title": "ase.anomaly.event v0.1",
+  "type": "object",
+  "$id": "ase.anomaly.event.v0.1"
+}

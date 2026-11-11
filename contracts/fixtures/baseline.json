@@ -1,0 +1,16 @@
+{
+  "schema_version": "0.1",
+  "event_id": "BASE-B.HCM24156-H08-20261025",
+  "source": "ase",
+  "kind": "baseline",
+  "detected_at": "2026-10-26T01:00:00Z",
+  "window": {"start": "2026-10-19T01:00:00Z", "end": "2026-10-26T01:00:00Z"},
+  "scope": {"country": "VN", "station_id": "B.HCM24156"},
+  "metrics": [
+    {"name": "txn_count_per_hour", "observed": 31.4, "unit": "giao dịch/giờ", "hour_local": 8},
+    {"name": "fail_rate", "observed": 0.041, "unit": "tỷ lệ"},
+    {"name": "health_score", "observed": 92.5, "unit": "điểm"}
+  ],
+  "summary": "Mức nền 7 ngày của trạm B.HCM24156 khung 08:00–09:00 giờ VN",
+  "confidence": 1.0
+}
