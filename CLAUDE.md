@@ -17,7 +17,7 @@
 
 **Con người (OPS) xác thực. AI chỉ gợi ý, không bao giờ tự thực thi hành động.**
 
-Plan chi tiết, lịch và việc từng giai đoạn: **`docs/OPS_AGENT_PLAN.md`** (đọc trước khi code).
+Kế hoạch 2 trang: **`docs/KE_HOACH.md`**; chi tiết từng việc (phụ lục): **`docs/OPS_AGENT_PLAN.md`**; rubric: `docs/RUBRIC.md`; pair contract: **`contracts/PAIR_CONTRACT_v0.1.md`** (trong repo). Đọc trước khi code.
 
 ### Hướng mới từ 10/11 (ưu tiên hơn mọi mục mâu thuẫn bên dưới)
 
@@ -31,18 +31,19 @@ Plan chi tiết, lịch và việc từng giai đoạn: **`docs/OPS_AGENT_PLAN.m
 | Người nhận | **Một đội OPS** nhận mọi cảnh báo và ticket; CSKH nhận danh sách khách bị ảnh hưởng |
 | Mail / Teams | Giả lập: Mailpit (`ops@ase.local`, `cskh@ase.local`, gửi từ `ase-agent@ase.local`) + mock Teams. Chuyển sang thật chỉ bằng cấu hình (plan, mục "Chuyển sang mail và Teams thật") |
 | Ticket | `TicketClient`: `MockTicketClient` trước; `ManageEngineClient` khi chủ dự án có portal trial. 1 ticket/sự cố, tái diễn → thêm ghi chú |
-| Báo cáo kỳ | Tuần (08:00 thứ Hai giờ VN) và tháng (08:00 ngày 1): **chỉ gửi mail tự động**, theo từng hệ thống BSS (VN, PH, ID) và toàn mạng |
-| Dashboard | `/dashboard` = Danh sách giao dịch đổi pin (bộ lọc, xuất CSV) + Bản đồ trạm + Trạm & Tủ. Các trang thống kê khác đã bỏ. `/` mở thẳng dashboard (UI mock Teams tắt, bật bằng `ASE_MOCK_TEAMS_UI=true`) |
+| Báo cáo kỳ | Tuần (08:00 thứ Hai giờ VN) và tháng (08:00 ngày 1): **chỉ gửi mail tự động**, theo từng hệ thống BSS (hiện chỉ VN) kèm KPI success factor, health score dịch vụ critical, open point (`make report`) |
+| Dashboard | `/dashboard` = Danh sách giao dịch đổi pin (bộ lọc, xuất CSV) + Bản đồ trạm + Trạm & Tủ; cả ba dùng mã vận hành `B.…` và số liệu từ danh sách giao dịch (`station_codes.parquet` ánh xạ mã nội bộ của simulator; `txn_telemetry.parquet` là telemetry sinh khớp với giao dịch; số khoang theo loại tủ: CC_06_P 6, CC_12_P 12). Các trang thống kê khác đã bỏ. `/` mở thẳng dashboard (UI mock Teams tắt, bật bằng `ASE_MOCK_TEAMS_UI=true`) |
 | Pipeline cũ | Detector event 7 bước, correlator theo category, MQTT/Kafka: **đóng băng** sau Gate 1, không phát triển tiếp; xoá hay giữ sẽ hỏi chủ dự án sau CP1 |
+| **Góp ý Gate 0 (mentor 09/11, xử lý 10/11)** | **Chỉ VN** (danh sách giao dịch: `txn_stations`; PH/ID giữ trong `countries.yaml` nhưng không sinh). **LLM = V-LLM nội bộ** (`ASE_LLM_PROVIDER=vllm_internal`, mặc định `none` = rule-only); **cấm API LLM bên ngoài** (Claude/OpenAI…), LLM chạy bất đồng bộ, tách khỏi luồng quét. Success factor = **KPI của luồng đổi pin + health score dịch vụ critical + open point từ KPI** (`ase/report/`, `knowledge/kpi.yaml`); SF1–SF10 chỉ là chỉ tiêu chất lượng của AI. Detector realtime trên log thuộc phần Nhân |
 
 Kiến trúc mới:
 
 ```
 TransactionSource (mock parquet · tệp "Xuất dữ liệu" CSV/XLSX)
    → Scanner (mốc :00/:30, theo Clock) → Analyzer (code, tất định)
-   → Insight LLM (Haiku 5.5, 1 lần gọi/lần quét, tuỳ chọn)
+   → Insight LLM (V-LLM nội bộ, 1 lần gọi/lần quét, tuỳ chọn)
    → Notifier (1 mail + 1 card / lần quét) + Ticket (theo sự cố)
-   → Báo cáo tuần/tháng (mail) · Evaluator (so ground truth)
+   → KPI + health score + open point → Báo cáo tuần/tháng (mail) · Evaluator (so ground truth)
 ```
 
 Đây là đề tài học thuật. Gate 1 và CP1 dùng **mock data** do simulator sinh ra (có ground truth). CP2 và CP3 chạy trên **dữ liệu masked** (dữ liệu vận hành đã che thông tin) được cung cấp sau; dữ liệu này **không có ground truth**, cần gán nhãn tay một mẫu. Không kết nối hệ thống production thật.
@@ -60,7 +61,7 @@ TransactionSource (mock parquet · tệp "Xuất dữ liệu" CSV/XLSX)
 
 **Chưa có schema dữ liệu masked**, nên kiểm chứng bằng **field ablation trên mock `dev`**: chạy rule-only với các tập trường theo tầng (mục 10.1), từ đầy đủ xuống tối thiểu, đo SF2/SF4 ở từng mức. Kết quả (bảng "tập trường → SF4") là output Gate 1 và là **danh sách yêu cầu dữ liệu** gửi mentor.
 
-**Dữ liệu masked và LLM:** dùng **Claude Haiku 5.5** cho cả dữ liệu masked (quyết định của chủ dự án), bật bằng cờ `ASE_ALLOW_EXTERNAL_LLM_ON_MASKED=true`. Nếu sau này không được phép gửi dữ liệu masked ra API ngoài → chuyển sang `ollama` (model local) chỉ bằng cấu hình.
+**Dữ liệu masked và LLM:** chỉ dùng **V-LLM nội bộ công ty** (mentor không duyệt gửi dữ liệu lên API bên ngoài, đánh giá Gate 0). `ASE_ALLOW_EXTERNAL_LLM_ON_MASKED` luôn `false`. Chưa có endpoint V-LLM → chạy rule-only.
 
 **Gán nhãn:** đã có người gán nhãn mẫu dữ liệu masked làm ground truth.
 
@@ -231,7 +232,7 @@ Nguyên tắc: **tinh gọn, mọi thứ chạy bằng một lệnh trên laptop
 - **Makefile**: `make sim`, `make e2e`, `make eval`, `make llm-cost`, `make check`
 
 **Ưu tiên 2 — trước CP1:**
-- LLM: **SDK chính thức `anthropic`** (structured output, prompt caching, Batch API)
+- LLM: ~~SDK `anthropic`~~ → **V-LLM nội bộ** (xem §1 "Góp ý Gate 0"); adapter viết khi mentor cấp endpoint
 - **FastAPI + uvicorn**: feedback API + mock Teams (trang HTML render Adaptive Card bằng thư viện JS `adaptivecards`)
 - **httpx** async + **tenacity** (backoff + jitter, tôn trọng `Retry-After`)
 - Chọn runbook bằng **ánh xạ cố định `error_code → runbook_id`** trong YAML (không RAG)
@@ -247,7 +248,7 @@ Nguyên tắc: **tinh gọn, mọi thứ chạy bằng một lệnh trên laptop
 - Mail: aiosmtplib → **Mailpit** (Docker, container duy nhất) khi dev/demo; dự án thật trỏ sang SMTP công ty chỉ bằng `.env` (host/port/TLS/auth). Teams: mock Teams. **Không có quyền Graph API.** `GraphMailer` chỉ là implementation tuỳ chọn sau interface `Notifier`, không bắt buộc.
 - Teams: **không có quyền Teams Workflows.** Dùng **mock Teams**: endpoint FastAPI nhận Adaptive Card JSON + trang web hiển thị card giống Teams, nút feedback hoạt động thật. `TeamsWebhookNotifier` tuỳ chọn.
 - LLM: đặt sau interface `LLMClient` (structured output + tool use), chọn bằng env `ASE_LLM_PROVIDER` / `ASE_LLM_MODEL`; mỗi provider một adapter, phần còn lại của code không biết provider.
-  - **Provider chính cho toàn dự án (mock và masked): `anthropic` + Claude Haiku 5.5** (`claude-haiku-5-5`). Chi phí được kiểm soát theo mục 17.
+  - **Đã thay (10/11): provider duy nhất là V-LLM nội bộ** (`vllm_internal`). Các dòng nhắc `anthropic` / Haiku / `ollama` dưới đây là thiết kế cũ, chỉ giữ ý: single-shot, structured output, validate Pydantic, fallback rule, bất đồng bộ.
   - **Phương án dự phòng: `ollama`** (model open-weight local), chỉ dùng khi chủ dự án báo dữ liệu masked không được gửi ra API ngoài.
   - **Phần cứng:** laptop Intel Core Ultra 7 155H, iGPU Intel Arc, **16GB RAM dùng chung, không có GPU NVIDIA** → Ollama chạy CPU. Ngân sách cho model ~6–8GB ⇒ **tối đa 7–8B lượng tử Q4**; ưu tiên thử 3–4B vì nhanh hơn. Ước lượng 7B Q4: ~8–15 token/s sinh; prefill prompt dài rất chậm.
   - Chọn model bằng benchmark trên 50 incident mock: tỷ lệ parse JSON thành công, SF4 trên case `UNKNOWN`, SF6, latency/incident.
@@ -427,7 +428,7 @@ Adaptive Card rút gọn, "channel" theo category; P1 đánh dấu người tr�
 ### Lịch quét và thông báo (ý mentor, chốt 10/11 — thay lịch "P1 ngay + gom 15 phút")
 | Loại | Khi nào | Gửi cho ai | Nội dung |
 |---|---|---|---|
-| **Thông báo mỗi lần quét** | Mốc tròn :00 / :30 (`scan.interval_minutes: 30`), **chỉ khi có lỗi** | Đội OPS (`ops@ase.local`) | 1 mail + 1 card Teams: giao dịch thất bại/kẹt mới, nhóm theo sự cố (mã, tên cảnh báo, mức, trạm/tủ, giờ địa phương), CSV đính kèm, mã ticket |
+| **Thông báo mỗi lần quét** | Mốc tròn :00 / :30 (`scan.interval_minutes: 30`), **khi có ít nhất 1 giao dịch lỗi/kẹt mới, kể cả chỉ có lỗi lẻ không thành sự cố** (chốt 10/11) | Đội OPS (`ops@ase.local`) | 1 mail + 1 card Teams: giao dịch thất bại/kẹt mới, nhóm theo sự cố (mã, tên cảnh báo, mức, trạm/tủ, giờ địa phương), CSV đính kèm, mã ticket |
 | **Ticket** | Cùng lần quét | Đội OPS | 1 ticket/sự cố đạt ngưỡng (mặc định: có mã `High`, hoặc ≥ 3 giao dịch, hoặc lặp 2 lần quét liên tiếp); tái diễn → thêm ghi chú |
 | **Khách bị ảnh hưởng** | Cùng nhịp 30 phút, chỉ khi có | CSKH (`cskh@ase.local`) | Khách đã trả pin chưa nhận pin; khách thất bại ≥ 2 lần/ngày (chỉ `user_id` hash) |
 | **Báo cáo tuần** | 08:00 thứ Hai giờ VN, kỳ thứ Hai–Chủ nhật tuần trước | Đội OPS | Top N lỗi (mặc định 5), % trên tổng số phiên lỗi, theo từng hệ thống BSS và toàn mạng; CSV |
@@ -665,7 +666,7 @@ Chi tiết từng việc, file và tiêu chí xong: `docs/OPS_AGENT_PLAN.md`. Cu
 - **Bước 0 (10–11/11):** chốt hiện trạng, tài liệu. Gate 1 (11/11) trình bày skeleton cũ + hướng mới; **không đổi code pipeline cũ trước buổi Gate 1**.
 - **Giai đoạn 1 (11 → 14/11) — nền dữ liệu:** loader bảng mã chuẩn; model `SwapTransaction`; simulator sinh danh sách giao dịch; dashboard đọc bảng này.
 - **Giai đoạn 2 (15 → 18/11, CP1) — agent:** `TransactionSource` + scanner 30 phút + analyzer; thông báo mỗi lần quét (mail + Teams); `MockTicketClient`; báo cáo tuần/tháng; evaluator rule-only.
-- **Giai đoạn 3 (19 → 25/11, CP2):** insight LLM (Haiku 5.5, cost guard §17); `ManageEngineClient` (khi có portal); `ExportFileSource` cho tệp "Xuất dữ liệu" thật; `TeamsWebhookNotifier` (khi có URL webhook); gán nhãn mẫu, đo lại SF.
+- **Giai đoạn 3 (19 → 25/11, CP2):** insight LLM (V-LLM nội bộ, khi có endpoint); `ManageEngineClient` (khi có portal); `ExportFileSource` cho tệp "Xuất dữ liệu" thật; `TeamsWebhookNotifier` (khi có URL webhook); gán nhãn mẫu, đo lại SF.
 - **Giai đoạn 4 (26/11 → 09/12, CP3):** customer-facing (mail CSKH), MTTA/MTTR từ ticket, open point tuần, báo cáo cuối, tài liệu bàn giao, demo.
 - Phần đối tác (§9): vẫn DEFERRED.
 
@@ -675,8 +676,8 @@ Chi tiết từng việc, file và tiêu chí xong: `docs/OPS_AGENT_PLAN.md`. Cu
 
 **Đã chốt:**
 - Lịch mốc: xem mục 1.
-- LLM: **Claude Haiku 5.5 cho toàn dự án** (mock và masked), chế độ single-shot; Ollama local là dự phòng; sau interface `LLMClient`. Kiểm soát chi phí theo mục 17.
-- Dữ liệu masked: được gửi lên Haiku (cờ `ASE_ALLOW_EXTERNAL_LLM_ON_MASKED=true`); chủ dự án sẽ báo nếu không được phép.
+- LLM: ~~Claude Haiku 5.5~~ → **V-LLM nội bộ** (góp ý Gate 0, 10/11), single-shot, sau interface `LLMClient`.
+- Dữ liệu masked: **không** gửi ra LLM/SaaS bên ngoài; chỉ V-LLM nội bộ.
 - Chưa có schema dữ liệu masked → field ablation T0–T3 + adapter cấu hình được.
 - Đã có người gán nhãn mẫu dữ liệu masked.
 - Mail: aiosmtplib → **Mailpit** (Docker, container duy nhất) khi dev/demo; dự án thật trỏ sang SMTP công ty chỉ bằng `.env` (host/port/TLS/auth). Teams: mock Teams.
@@ -684,13 +685,15 @@ Chi tiết từng việc, file và tiêu chí xong: `docs/OPS_AGENT_PLAN.md`. Cu
 - Luồng dữ liệu (07/11): mentor xác nhận luồng BSS thật Pin/Tủ (CAN/RS485) → MQTT/AWS IoT Core → Kafka → microservices. Gate 1 mô phỏng **MQTT (Mosquitto) + Kafka (Redpanda)**, thêm `aiokafka`, `aiomqtt`; đánh giá vẫn trên JSONL.
 - Dashboard: nền bản đồ **Vietmap** (vector qua `@vietmap/vietmap-gl-leaflet`, key `ASE_VIETMAP_API_KEY` trong `.env`), không dùng OSM. Profile `demo` (286 trạm, VN 200 trạm đặt tại tủ VinFast thật) chỉ để trình diễn.
 - Phần đối tác: chỉ là điểm cộng, chỉ làm khi chủ dự án yêu cầu. Không sinh `ase.logs.raw` / `app_logs`; dùng `latency_ms` trên event.
-- Quốc gia: **sinh dữ liệu 3 nước đã triển khai** VN, PH, ID (mục 10, "Phạm vi quốc gia"); `smoke` chỉ VN. **Không sinh IN, TH, MY** (mới công bố kế hoạch); thêm sau qua `countries.yaml`. OPS: một đội trung tâm, alert tiếng Việt cho mọi nước, routing theo category.
+- Quốc gia: ~~3 nước~~ → **chỉ VN** cho danh sách giao dịch (góp ý Gate 0, 10/11); pipeline cũ vẫn 3 nước. Trước đây: sinh dữ liệu 3 nước đã triển khai VN, PH, ID (mục 10, "Phạm vi quốc gia"); `smoke` chỉ VN. **Không sinh IN, TH, MY** (mới công bố kế hoạch); thêm sau qua `countries.yaml`. OPS: một đội trung tâm, alert tiếng Việt cho mọi nước, routing theo category.
 
 - Phần cứng: Core Ultra 7 155H, 16GB RAM, không GPU NVIDIA → model local ≤ 7–8B Q4 chạy CPU, LLM bất đồng bộ, không tool loop.
 
 - **Đổi hướng 09–10/11:** ASE là AI Agent hỗ trợ vận hành trên Danh sách giao dịch đổi pin; toàn bộ quyết định ở §1 "Hướng mới từ 10/11" (bảng mã chuẩn giữ nguyên văn, quét 30 phút/lần, một đội OPS, mail giả lập, ticket giả lập trước ManageEngine, báo cáo tuần/tháng chỉ qua mail). Các quyết định cũ về P1/P2/P3, category, gom 15 phút, báo cáo ngày 18:00, MQTT/Kafka chỉ còn áp cho pipeline cũ đã đóng băng.
 
 **Còn mở:**
+- V-LLM nội bộ: endpoint, kiểu API, model, quota (hỏi mentor).
+- Đối tác (Nhân) xác nhận pair contract v0.1.
 - ManageEngine: chủ dự án đăng ký trial sau (cloud hay on-premise, region, khoá API).
 - Tệp "Xuất dữ liệu" mẫu của Danh sách giao dịch (CSV/XLSX) cho `ExportFileSource`.
 - URL webhook Teams và tài khoản SMTP nếu muốn bật kênh thật.
@@ -699,7 +702,9 @@ Chi tiết từng việc, file và tiêu chí xong: `docs/OPS_AGENT_PLAN.md`. Cu
 
 ---
 
-## 17. Kiểm soát chi phí LLM (Claude Haiku 5.5)
+## 17. Kiểm soát chi phí LLM (thiết kế cũ cho Claude Haiku — KHÔNG còn áp dụng)
+
+> Từ 10/11 LLM là V-LLM nội bộ (§1). Giữ ý chung: ghi `data/llm_usage.jsonl`, giới hạn `max_tokens`, cache kết quả theo nội dung, cờ `--no-llm`. Cấu hình hiện hành: `.env.example`.
 
 **Ngân sách:** tổng ≤ **$30** cho toàn dự án (05/11 → CP3), xem lại khi biết khối lượng dữ liệu masked. Ước tính với single-shot: ~$0.0015/incident, một lần `eval` (~500 incident) ≈ $0.5–1.
 
