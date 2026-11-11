@@ -1,6 +1,6 @@
-# ASE – AI Agent hỗ trợ vận hành đổi pin (mock VN)
+# ASE – AI Agent hỗ trợ vận hành (áp dụng đầu tiên: hệ thống đổi pin BSS, mock VN)
 
-Agent đọc **Danh sách giao dịch đổi pin** (read-only), quét 30 phút/lần, gộp giao dịch lỗi thành sự cố, gửi 1 mail + 1 card Teams mỗi lần quét cho đội OPS, và lập báo cáo tuần/tháng: KPI success factor, Top N lỗi, health score dịch vụ critical, open point. Dữ liệu là mock do simulator sinh (có ground truth); không kết nối hệ thống thật. LLM (khi bật) chỉ dùng V-LLM nội bộ.
+ASE là AI Agent hỗ trợ vận hành, áp dụng đầu tiên cho hệ thống BSS (hướng lâu dài: nhiều hệ thống). Với BSS, agent đọc **Danh sách giao dịch đổi pin** (read-only), quét 30 phút/lần, gộp giao dịch lỗi thành sự cố, gửi 1 mail + 1 card Teams mỗi lần quét cho đội OPS, và lập báo cáo tuần/tháng: KPI success factor, Top N lỗi, health score dịch vụ critical, open point. Dữ liệu là mock do simulator sinh (có ground truth); không kết nối hệ thống thật. LLM (khi bật) chỉ dùng V-LLM nội bộ.
 
 ## Cài đặt
 
