@@ -410,3 +410,56 @@ async def test_agent_replay_and_evaluator_on_smoke(
     assert report.n_instances >= 4 and report.n_instances_detected >= 1
     md = render_markdown(report)
     assert "| SF1 |" in md and "| SF8 |" in md
+
+
+def test_telemetry_matches_transactions_and_overheat_scenario() -> None:
+    from ase.simulator.txn_generator import slot_id_of
+
+    r = simulate_transactions("smoke")
+    tel = r.telemetry
+    codes = {c.cabinet_code for c in r.cabinet_codes}
+    assert set(tel["cabinet_id"].unique()) == codes  # telemetry dùng mã tủ vận hành
+    # Mỗi giao dịch có pin vào → có dòng khoang đúng connector, đúng thời điểm
+    slot_rows = tel.filter(pl.col("slot_id").is_not_null())
+    keys = set(
+        zip(slot_rows["cabinet_id"], slot_rows["slot_id"], slot_rows["heartbeat_at"], strict=True)
+    )
+    for t in r.transactions:
+        if t.battery_in_at is not None:
+            assert (t.cabinet_id, slot_id_of(t.slot_in or 0), t.battery_in_at) in keys
+    # Connector không vượt số khoang của loại tủ
+    n_slots = {"CC_06_P": 6, "CC_12_P": 12}
+    for t in r.transactions:
+        if t.slot_in:
+            assert 1 <= int(t.slot_in) <= n_slots[t.cabinet_type or ""]
+    # Kịch bản quá nhiệt: nhiệt độ heartbeat của đúng tủ đó vượt 55 °C trong khoảng sự cố
+    by_internal = {c.cabinet_id: c.cabinet_code for c in r.cabinet_codes}
+    hot = [i for i in r.instances if i.spec.overheat_temp_c]
+    assert hot
+    for inst in hot:
+        assert inst.cabinet_id is not None
+        window = tel.filter(
+            (pl.col("cabinet_id") == by_internal[inst.cabinet_id])
+            & pl.col("slot_id").is_null()
+            & (pl.col("heartbeat_at") >= inst.start)
+            & (pl.col("heartbeat_at") < inst.end)
+        )
+        max_temp = window["temperature"].max()
+        assert isinstance(max_temp, float) and max_temp > 55
+    normal = tel.filter(pl.col("slot_id").is_null())["temperature"].median()
+    assert isinstance(normal, float) and normal < 40
+
+
+def test_analyzer_merges_codes_of_one_critical_service_into_one_wide_incident() -> None:
+    a = Analyzer(SPEC, {"D6036": "svc:payment_callback", "D6037": "svc:payment_callback"})
+    dets = [
+        _det(i, "D6036" if i % 2 else "D6037", station=f"B.TST0000{i % 4 + 1}") for i in range(1, 9)
+    ]
+    (inc,) = a.analyze(T0, _result(dets))
+    assert inc.kind == "WIDE" and inc.key == "WIDE|svc:payment_callback"
+    assert sorted(inc.groups) == ["D6036", "D6037"] and len(inc.txn_ids) == 8
+    # Không có ánh xạ dịch vụ → mỗi mã một nhóm, D6037 riêng (4 lỗi) chưa đủ ngưỡng lan rộng
+    b = Analyzer(SPEC)
+    dets_b = [d.model_copy(update={"incident_id": None}) for d in dets]
+    keys = {i.key for i in b.analyze(T0, _result(dets_b))}
+    assert "WIDE|svc:payment_callback" not in keys

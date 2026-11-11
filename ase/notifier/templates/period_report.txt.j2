@@ -1,0 +1,42 @@
+Dear Team {{ team }},
+
+Em xin gửi báo cáo về các phiên đổi pin lỗi trên hệ thống BSS trong {{ period_label }} như sau:
+{% for s in sections %}
+
+=== Hệ thống BSS {{ s.country_label }} ===
+Top {{ s.top | length }} lỗi đang chiếm số lượng lớn {{ s.top_pct }}% trong tổng số {{ s.n_failures }} các phiên lỗi:
+{% for c in s.top %}
+  {{ loop.index }}. {{ c.code }} – {{ c.name }}{% if c.level %} ({{ c.level }}){% endif %}, chiếm {{ c.pct }}% ({{ c.n }} case)
+{% endfor %}
+
+KPI success factor của luồng đổi pin:
+  • Tổng giao dịch          : {{ s.n_total }}
+  • Tỷ lệ đổi pin thành công: {{ s.success_rate }}{% if s.prev_failure_rate %} (kỳ trước: tỷ lệ lỗi {{ s.prev_failure_rate }}){% endif %}
+
+  • Phiên lỗi               : {{ s.n_failures }} (Thất bại {{ s.n_failed }}, kẹt {{ s.n_stuck }}) – tỷ lệ lỗi {{ s.failure_rate }}
+  • Thời gian một lần đổi   : p50 {{ s.swap_p50 }}, p95 {{ s.swap_p95 }}
+  • Khách đã trả pin, chưa nhận pin mới: {{ s.n_returned_not_received }}
+  • Khách bị ảnh hưởng      : {{ s.n_users_affected }} (thất bại ≥ {{ repeat_min }} lần/ngày: {{ s.n_repeat_users }})
+
+Health score dịch vụ critical:
+{% for h in s.services %}
+  • {{ h.service_name }}: {{ h.score }} ({{ h.label }}) – {{ h.n_fail }} giao dịch lỗi ({{ h.fail_pct }}%)
+{% endfor %}
+{% for h in s.weak_cabinets %}
+  • Tủ {{ h.entity }}: {{ h.score }} ({{ h.label }}) – {{ h.n_fail }}/{{ h.n_total }} giao dịch lỗi/kẹt
+{% endfor %}
+{% if s.open_points %}
+
+Open point và đề xuất ({{ s.open_points | length }}{% if s.n_open_points > s.open_points | length %}/{{ s.n_open_points }}, đủ trong CSV{% endif %}):
+{% for o in s.open_points %}
+  [{{ o.priority }}] {{ o.title }}
+      Ảnh hưởng: {{ o.impact }}
+      Đề xuất  : {{ o.recommendations | join("; ") }}
+      Bằng chứng: {{ o.evidence | join(", ") }}
+{% endfor %}
+{% endif %}
+{% endfor %}
+
+Tệp đính kèm {{ csv_filename }}: số phiên lỗi theo từng mã.
+Mã báo cáo: {{ report_id }}
+-- Số liệu do hệ thống tính từ Danh sách giao dịch đổi pin; AI chỉ gợi ý, quyết định cuối cùng thuộc về OPS.

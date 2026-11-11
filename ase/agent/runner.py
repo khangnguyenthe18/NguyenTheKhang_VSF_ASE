@@ -10,7 +10,7 @@ from ase.agent.models import ScanDigest
 from ase.agent.scanner import Scanner
 from ase.agent.source import TransactionSource
 from ase.common.transport import SimClock
-from ase.knowledge.loader import ErrorTable, ScanSpec
+from ase.knowledge.loader import ErrorTable, KpiSpec, ScanSpec, default_kpi
 
 
 def scan_ticks(start: datetime, end: datetime, interval_minutes: int) -> Iterator[datetime]:
@@ -28,10 +28,17 @@ def scan_ticks(start: datetime, end: datetime, interval_minutes: int) -> Iterato
 class ScanAgent:
     """Ghép Scanner + Analyzer. `run_replay` phát lại dữ liệu mock bằng `SimClock` (không ngủ)."""
 
-    def __init__(self, source: TransactionSource, table: ErrorTable, spec: ScanSpec) -> None:
+    def __init__(
+        self,
+        source: TransactionSource,
+        table: ErrorTable,
+        spec: ScanSpec,
+        kpi: KpiSpec | None = None,
+    ) -> None:
         self.spec = spec
         self.scanner = Scanner(source, table, spec)
-        self.analyzer = Analyzer(spec)
+        services = (kpi or default_kpi()).services
+        self.analyzer = Analyzer(spec, {c: f"svc:{s.id}" for s in services for c in s.codes})
 
     def scan_once(self, scan_at: datetime) -> ScanDigest:
         window_start = scan_at - timedelta(minutes=self.spec.interval_minutes)

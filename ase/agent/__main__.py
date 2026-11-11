@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import orjson
@@ -20,12 +21,15 @@ from ase.agent.runner import ScanAgent
 from ase.agent.source import MockTransactionSource
 from ase.common.config import get_settings
 from ase.common.transport import SimClock
-from ase.knowledge.loader import default_error_table, default_knowledge
+from ase.knowledge.loader import default_error_table, default_knowledge, default_kpi
+from ase.notifier.period_mail import PeriodReportNotifier
 from ase.notifier.scan_digest import ScanNotifier
+from ase.report.period import build_period_report, due_reports
 
 AGENT_DIR = "agent"
 DIGESTS = "digests.jsonl"
 SUMMARY = "summary.json"
+REPORTS_DIR = "reports"
 
 
 class RunSummary(BaseModel):
@@ -37,6 +41,7 @@ class RunSummary(BaseModel):
     n_detections: int
     n_incidents: int
     notifications: dict[str, int]  # "<kênh>:<trạng thái>" → số lần
+    reports: list[str] = []  # report_id của các báo cáo tuần/tháng đã lập trong lần chạy
 
 
 async def run(profile: str, out_dir: Path, *, notify: bool, max_notify: int | None) -> RunSummary:
@@ -50,6 +55,12 @@ async def run(profile: str, out_dir: Path, *, notify: bool, max_notify: int | No
     agent = ScanAgent(source, default_error_table(), spec)
     clock = SimClock()
     notifier = ScanNotifier(settings, clock=clock, spec=spec) if notify else None
+    kpi = default_kpi()
+    report_notifier = PeriodReportNotifier(settings, clock=clock) if notify else None
+    reports_dir = out_dir / REPORTS_DIR
+    reports_dir.mkdir(exist_ok=True)
+    report_ids: list[str] = []
+    prev_tick: datetime | None = None
 
     sent: Counter[str] = Counter()
     incident_ids: set[str] = set()
@@ -64,6 +75,30 @@ async def run(profile: str, out_dir: Path, *, notify: bool, max_notify: int | No
             if notifier is not None:
                 for res in await notifier.notify(digest):
                     sent[f"{res.channel}:{res.status}"] += 1
+            # Báo cáo tuần / tháng đến hạn giữa hai mốc quét (theo đồng hồ mô phỏng)
+            if prev_tick is not None:
+                for kind, start, end in due_reports(prev_tick, digest.scan_at, kpi):
+                    report = build_period_report(
+                        source.frame,
+                        kind=kind,
+                        start=start,
+                        end=end,
+                        generated_at=digest.scan_at,
+                        spec=kpi,
+                        scan=spec,
+                        table=default_error_table(),
+                    )
+                    if not report.sections:  # kỳ chưa có giao dịch nào (trước khi có dữ liệu)
+                        continue
+                    report_ids.append(report.report_id)
+                    path = reports_dir / (report.report_id.replace(":", "-") + ".json")
+                    path.write_bytes(
+                        orjson.dumps(report.model_dump(mode="json"), option=orjson.OPT_INDENT_2)
+                    )
+                    if report_notifier is not None:
+                        res = await report_notifier.send(report)
+                        sent[f"report:{res.status}"] += 1
+            prev_tick = digest.scan_at
     summary = RunSummary(
         profile=profile,
         n_transactions=source.n_transactions,
@@ -73,6 +108,7 @@ async def run(profile: str, out_dir: Path, *, notify: bool, max_notify: int | No
         n_detections=n_det,
         n_incidents=len(incident_ids),
         notifications=dict(sorted(sent.items())),
+        reports=report_ids,
     )
     (out_dir / SUMMARY).write_bytes(
         orjson.dumps(summary.model_dump(mode="json"), option=orjson.OPT_INDENT_2) + b"\n"
@@ -101,6 +137,8 @@ def main(argv: list[str] | None = None) -> None:
         f"lần quét có lỗi {s.n_scans_with_detections} · giao dịch lỗi/kẹt {s.n_detections} · "
         f"sự cố {s.n_incidents}"
     )
+    if s.reports:
+        print("báo cáo kỳ: " + ", ".join(s.reports))
     if s.notifications:
         print("thông báo: " + ", ".join(f"{k}={v}" for k, v in s.notifications.items()))
     print(f"kết quả: {out}")

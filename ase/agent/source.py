@@ -81,6 +81,11 @@ class MockTransactionSource:
         return lo, hi
 
     @property
+    def frame(self) -> pl.DataFrame:
+        """Toàn bộ danh sách (trạng thái cuối). Người dùng phải xem qua `view_as_of`."""
+        return self._df
+
+    @property
     def n_transactions(self) -> int:
         return self._df.height
 

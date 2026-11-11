@@ -9,7 +9,7 @@ SPEED ?= 60
 E2E_SPEED ?= 18000
 E2E_PATH_YIELD_MS ?= 25
 
-.PHONY: check lint type test sim agent agent-eval detect detect-ablation eval ablation teams dashboard notify-demo mail-up mail-down demo stream-up stream-down stream-demo e2e
+.PHONY: check lint type test sim agent agent-eval report detect detect-ablation eval ablation teams dashboard notify-demo mail-up mail-down demo stream-up stream-down stream-demo e2e
 
 check: lint type test
 
@@ -35,6 +35,11 @@ agent:
 # Đo SF1–SF5, SF7, SF8 của agent (rule-only). PROFILE=eval chỉ đánh giá split test.
 agent-eval: agent
 	$(UV_RUN) python -m ase.evaluator.txn_eval --profile $(PROFILE) $(if $(filter eval,$(PROFILE)),--split test,)
+
+# Báo cáo kỳ cho khoảng ngày bất kỳ: make report PROFILE=dev FROM=2026-10-19 TO=2026-10-25 TOP=5
+TOP ?= 5
+report:
+	$(UV_RUN) python -m ase.report --profile $(PROFILE) --from $(FROM) --to $(TO) --top $(TOP) $(if $(NOTIFY),--notify,)
 
 FIELDS ?= ALL
 detect:

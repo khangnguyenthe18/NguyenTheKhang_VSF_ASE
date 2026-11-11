@@ -477,3 +477,90 @@ def load_knowledge(directory: Path = KNOWLEDGE_DIR) -> Knowledge:
 @lru_cache(maxsize=1)
 def default_knowledge() -> Knowledge:
     return load_knowledge()
+
+
+# --- kpi.yaml: KPI, health score, open point, báo cáo kỳ ---------------------------------------
+
+
+class HealthSpec(_Strict):
+    good_min: float = Field(gt=0, le=100)
+    watch_min: float = Field(gt=0, le=100)
+    high_penalty_per_pp: float = Field(ge=0)
+
+    def label(self, score: float) -> str:
+        if score >= self.good_min:
+            return "Tốt"
+        return "Cần theo dõi" if score >= self.watch_min else "Kém"
+
+
+class ServiceSpec(_Strict):
+    id: str
+    name: str
+    scope: Literal["cabinet", "station"] | None = None
+    codes: list[str] = Field(default_factory=list)
+    target_fail_pct: float = Field(ge=0)
+    penalty_per_pp: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _one_kind(self) -> ServiceSpec:
+        if (self.scope is None) == (not self.codes):
+            raise ValueError(f"dịch vụ {self.id}: cần đúng một trong `scope` hoặc `codes`")
+        return self
+
+
+class OpenPointSpec(_Strict):
+    health_below: float
+    code_increase_pct: float = Field(gt=0)
+    code_increase_min_cases: int = Field(ge=1)
+    repeat_cabinet_code_min: int = Field(ge=2)
+    repeat_rate_ratio: float = Field(ge=1)
+    level_weight: dict[Literal["High", "Low", "none"], float]
+
+
+class ScheduleSpec(_Strict):
+    weekday: int | None = Field(default=None, ge=0, le=6)
+    day: int | None = Field(default=None, ge=1, le=28)
+    local_time: str
+
+    @property
+    def hour_minute(self) -> tuple[int, int]:
+        h, m = self.local_time.split(":")
+        return int(h), int(m)
+
+
+class ReportSpec(_Strict):
+    timezone: str
+    top_n: int = Field(ge=1)
+    weekly: ScheduleSpec
+    monthly: ScheduleSpec
+    repeat_user_min_failures: int = Field(ge=2)
+
+    @model_validator(mode="after")
+    def _check(self) -> ReportSpec:
+        ZoneInfo(self.timezone)
+        if self.weekly.weekday is None or self.monthly.day is None:
+            raise ValueError("weekly cần `weekday`, monthly cần `day`")
+        return self
+
+
+class KpiSpec(_Strict):
+    health: HealthSpec
+    services: list[ServiceSpec]
+    open_points: OpenPointSpec
+    report: ReportSpec
+
+    def check_codes(self, table: ErrorTable) -> None:
+        unknown = {c for s in self.services for c in s.codes} - table.codes
+        if unknown:
+            raise ValueError(f"kpi.yaml tham chiếu mã không có trong bảng chuẩn: {sorted(unknown)}")
+
+
+def load_kpi(directory: Path = KNOWLEDGE_DIR) -> KpiSpec:
+    spec = KpiSpec.model_validate(_load_yaml("kpi.yaml", directory))
+    spec.check_codes(default_error_table())
+    return spec
+
+
+@lru_cache(maxsize=1)
+def default_kpi() -> KpiSpec:
+    return load_kpi()

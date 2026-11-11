@@ -1,0 +1,39 @@
+# KPI success factor của luồng đổi pin, health score dịch vụ critical và open point
+# (góp ý Gate 0 của mentor; docs/OPS_AGENT_PLAN.md). Cấu hình của ASE, KHÔNG phải bảng mã lỗi:
+# bảng mã lỗi chuẩn (error_catalog_v1.yaml) giữ nguyên văn, file này chỉ tham chiếu mã của nó.
+
+# Health score (0–100) của một đối tượng = 100
+#   − penalty_per_pp × max(0, % lỗi/kẹt − target_fail_pct)
+#   − high_penalty_per_pp × % giao dịch lỗi có mã mức High
+# rồi kẹp về [0, 100]. Tính theo TỶ LỆ nên không phụ thuộc độ dài kỳ (tuần / tháng).
+# ≥ good_min: Tốt · ≥ watch_min: Cần theo dõi · còn lại: Kém.
+health:
+  good_min: 90
+  watch_min: 70
+  high_penalty_per_pp: 10
+
+# Dịch vụ critical. `scope: cabinet|station` = mỗi tủ/trạm một điểm (% lỗi trên giao dịch của nó).
+# `codes`: dịch vụ toàn mạng, % lỗi = số giao dịch có các mã này / tổng giao dịch. Mã được chọn
+# theo đúng "Tên cảnh báo" trong bảng chuẩn (Payment Callback …, TxnUploadFailure).
+services:
+  - {id: cabinet, name: "Tủ đổi pin", scope: cabinet, target_fail_pct: 5.0, penalty_per_pp: 5}
+  - {id: station, name: "Trạm đổi pin", scope: station, target_fail_pct: 5.0, penalty_per_pp: 5}
+  - {id: payment_callback, name: "Callback thanh toán", codes: [D6036, D6037], target_fail_pct: 1.0, penalty_per_pp: 50}
+  - {id: txn_upload, name: "Đồng bộ giao dịch tủ → hệ thống", codes: [B0207], target_fail_pct: 0.1, penalty_per_pp: 50}
+
+# Open point sinh từ KPI (CLAUDE.md §11). Priority = công thức, không để LLM chấm.
+open_points:
+  health_below: 70            # đối tượng có health score < N
+  code_increase_pct: 50       # mã lỗi tăng ≥ N% so với kỳ trước ...
+  code_increase_min_cases: 10 # ... và có ≥ N case trong kỳ này
+  repeat_cabinet_code_min: 5  # cùng một mã lặp ≥ N lần tại một tủ trong kỳ ...
+  repeat_rate_ratio: 3        # ... và tỷ lệ mã đó tại tủ ≥ N × tỷ lệ toàn mạng
+  level_weight: {High: 3, Low: 1, none: 1}
+
+# Báo cáo kỳ (CLAUDE.md §8): chỉ gửi mail tự động. Giờ theo `timezone`.
+report:
+  timezone: "Asia/Ho_Chi_Minh"
+  top_n: 5
+  weekly: {weekday: 0, local_time: "08:00"}   # 0 = thứ Hai; kỳ = thứ Hai–Chủ nhật tuần trước
+  monthly: {day: 1, local_time: "08:00"}      # kỳ = tháng trước
+  repeat_user_min_failures: 2                 # khách thất bại ≥ N lần trong một ngày

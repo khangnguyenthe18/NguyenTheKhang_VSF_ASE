@@ -11,21 +11,25 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import orjson
 import polars as pl
 from pydantic import BaseModel
 
-from ase.agent.__main__ import AGENT_DIR, DIGESTS, SUMMARY, RunSummary, load_digests
+from ase.agent.__main__ import AGENT_DIR, DIGESTS, REPORTS_DIR, SUMMARY, RunSummary, load_digests
 from ase.agent.models import Detection, ScanDigest
+from ase.agent.source import load_transactions
 from ase.common.config import get_settings
 from ase.common.models import TxnGroundTruthRow
 from ase.evaluator.metrics import LatencyStats, latency_stats
 from ase.evaluator.report import git_sha, ok, pct
 from ase.knowledge.loader import ScanSpec, default_knowledge
 from ase.notifier.scan_digest import render_scan_email
+from ase.report.period import NO_CODE, STUCK, PeriodReport
 from ase.simulator.txn_generator import TXN_GROUND_TRUTH
 
 BACKGROUND = "background"
@@ -86,6 +90,11 @@ class TxnEvalReport(BaseModel):
     sf7: float | None
     max_notifications_per_scan: int
     n_scans_notified: int
+    # SF10: báo cáo tuần/tháng khớp dữ liệu
+    n_reports: int = 0
+    n_reports_match: int = 0
+    sf10: float | None = None
+    report_mismatches: list[str] = []
 
 
 def load_ground_truth(path: Path) -> dict[str, TxnGroundTruthRow]:
@@ -114,6 +123,42 @@ def _render_ok(digest: ScanDigest, spec: ScanSpec) -> bool:
     )
 
 
+def check_reports(
+    reports: list[PeriodReport], truth: dict[str, TxnGroundTruthRow], started: pl.DataFrame
+) -> tuple[int, list[str]]:
+    """SF10: đếm lại phiên lỗi của từng báo cáo từ GROUND TRUTH (không dùng code của báo cáo).
+
+    Khớp = với mỗi hệ thống BSS, tổng số phiên lỗi và số case của từng mã bằng đúng ground truth
+    (mã lỗi, hoặc STUCK / NO_CODE cho lỗi không mã) của các giao dịch bắt đầu trong kỳ.
+    """
+    start_of = dict(zip(started["emsp_txn_id"], started["started_at"], strict=True))
+    n_ok, bad = 0, []
+    for r in reports:
+        z = ZoneInfo(r.timezone)
+        lo = datetime.combine(r.period_start, time(0), z).astimezone(UTC)
+        hi = datetime.combine(r.period_end + timedelta(days=1), time(0), z).astimezone(UTC)
+        expected: dict[str, Counter[str]] = defaultdict(Counter)
+        for tid, g in truth.items():
+            t0 = start_of.get(tid)
+            if not g.is_failure or t0 is None or not lo <= t0 < hi:
+                continue
+            if g.failure_at is not None and g.failure_at > r.generated_at:
+                continue  # chưa lỗi tại thời điểm lập báo cáo
+            group = g.error_code or (STUCK if g.kind == "STUCK" else NO_CODE)
+            expected[g.country][group] += 1
+            expected["ALL"][group] += 1
+        ok = True
+        for sec in r.sections:
+            got = Counter({c.code: c.n for c in sec.all_codes})
+            want = expected[sec.country]
+            if got != want or sec.n_failures != sum(want.values()):
+                ok = False
+                n_want = sum(want.values())
+                bad.append(f"{r.report_id}/{sec.country}: báo cáo {sec.n_failures}, GT {n_want}")
+        n_ok += ok
+    return n_ok, bad
+
+
 def evaluate(
     profile: str,
     digests: list[ScanDigest],
@@ -122,6 +167,8 @@ def evaluate(
     *,
     split: str | None = None,
     spec: ScanSpec | None = None,
+    reports: list[PeriodReport] | None = None,
+    started: pl.DataFrame | None = None,
 ) -> TxnEvalReport:
     """Mọi chỉ tiêu chỉ tính trên giao dịch thuộc `split` (nếu có), trừ SF1 và SF7/SF8.
 
@@ -201,6 +248,10 @@ def evaluate(
 
     notified = [g for g in digests if g.detections]
     per_scan = Counter(g.scan_id for g in notified)
+    reps = reports or []
+    n_match, mismatches = (
+        check_reports(reps, truth, started) if reps and started is not None else (0, [])
+    )
     return TxnEvalReport(
         profile=profile,
         split=split,
@@ -232,6 +283,10 @@ def evaluate(
         sf7=_ratio(sum(_render_ok(g, spec) for g in notified), len(notified)),
         max_notifications_per_scan=max(per_scan.values(), default=0),
         n_scans_notified=len(per_scan),
+        n_reports=len(reps),
+        n_reports_match=n_match,
+        sf10=_ratio(n_match, len(reps)),
+        report_mismatches=mismatches,
     )
 
 
@@ -268,6 +323,9 @@ def render_markdown(r: TxnEvalReport) -> str:
         f"| SF8 | Thông báo mỗi lần quét | tối đa {r.max_notifications_per_scan} "
         f"({r.n_scans_notified}/{r.n_scans} lần quét có thông báo) | ≤ 1 | "
         f"{ok(r.max_notifications_per_scan <= 1)} |",
+        f"| SF10 | Báo cáo tuần/tháng khớp dữ liệu (tổng + từng mã) | {pct(r.sf10)} "
+        f"({r.n_reports_match}/{r.n_reports} báo cáo) | 100% | "
+        f"{ok(r.sf10 is not None and r.sf10 >= 1.0)} |",
         "",
         f"Sự cố: {r.n_incidents}, trong đó {r.n_incidents_background_only} sự cố chỉ gồm lỗi nền "
         "(không thuộc kịch bản nào).",
@@ -304,14 +362,33 @@ def render_markdown(r: TxnEvalReport) -> str:
     return "\n".join(lines)
 
 
-async def _load(
-    profile_dir: Path,
-) -> tuple[list[ScanDigest], RunSummary, dict[str, TxnGroundTruthRow]]:
-    def read() -> tuple[list[ScanDigest], RunSummary, dict[str, TxnGroundTruthRow]]:
+@dataclass(frozen=True)
+class _Loaded:
+    digests: list[ScanDigest]
+    summary: RunSummary
+    truth: dict[str, TxnGroundTruthRow]
+    reports: list[PeriodReport]
+    started: pl.DataFrame
+
+
+async def _load(profile_dir: Path) -> _Loaded:
+    def read() -> _Loaded:
         agent_dir = profile_dir / AGENT_DIR
         summary = RunSummary.model_validate_json((agent_dir / SUMMARY).read_bytes())
-        truth = load_ground_truth(profile_dir / TXN_GROUND_TRUTH)
-        return load_digests(agent_dir / DIGESTS), summary, truth
+        report_dir = agent_dir / REPORTS_DIR
+        reports = [
+            PeriodReport.model_validate_json(
+                (report_dir / (rid.replace(":", "-") + ".json")).read_bytes()
+            )
+            for rid in summary.reports
+        ]
+        return _Loaded(
+            digests=load_digests(agent_dir / DIGESTS),
+            summary=summary,
+            truth=load_ground_truth(profile_dir / TXN_GROUND_TRUTH),
+            reports=reports,
+            started=load_transactions(profile_dir).select("emsp_txn_id", "started_at"),
+        )
 
     return await asyncio.to_thread(read)
 
@@ -322,8 +399,11 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--split", default=None, help="chỉ đánh giá giao dịch thuộc split này (vd test)")
     args = p.parse_args(argv)
     profile_dir = get_settings().profile_dir(args.profile)
-    digests, summary, truth = asyncio.run(_load(profile_dir))
-    report = evaluate(args.profile, digests, summary, truth, split=args.split)
+    d = asyncio.run(_load(profile_dir))
+    report = evaluate(
+        args.profile, d.digests, d.summary, d.truth, split=args.split,
+        reports=d.reports, started=d.started,
+    )  # fmt: skip
     out = profile_dir / AGENT_DIR / "eval"
     out.mkdir(parents=True, exist_ok=True)
     (out / "report.md").write_text(render_markdown(report), encoding="utf-8")

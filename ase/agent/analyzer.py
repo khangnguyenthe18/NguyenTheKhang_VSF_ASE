@@ -53,7 +53,11 @@ class Baseline:
         return (self._fails[group] + self._spec.baseline_prior_rate * m) / (self._n + m)
 
     def is_above(self, group: str, count: int, exposure: int) -> bool:
-        lam = self.rate(group) * max(exposure, count)
+        return self.is_above_any([group], count, exposure)
+
+    def is_above_any(self, groups: list[str], count: int, exposure: int) -> bool:
+        """Kiểm định cho một nhóm nhiều mã (vd các mã của cùng một dịch vụ critical)."""
+        lam = sum(self.rate(g) for g in groups) * max(exposure, count)
         return poisson_tail(count, lam) < self._spec.baseline_alpha
 
     def update(self, scan_at: datetime, n_new: int, groups: Counter[str]) -> None:
@@ -89,8 +93,14 @@ def _max_level(a: AlertLevel | None, b: AlertLevel | None) -> AlertLevel | None:
 
 
 class Analyzer:
-    def __init__(self, spec: ScanSpec) -> None:
+    """`wide_groups`: mã → khoá gộp lan rộng. Các mã của cùng một dịch vụ critical toàn mạng
+    (`kpi.yaml`, vd D6036 + D6037 = callback thanh toán) gộp thành MỘT sự cố lan rộng, vì một
+    sự cố của dịch vụ thường sinh nhiều mã cùng lúc. Mã khác gộp theo chính nó.
+    """
+
+    def __init__(self, spec: ScanSpec, wide_groups: dict[str, str] | None = None) -> None:
         self._spec = spec
+        self._wide_groups = wide_groups or {}
         self.baseline = Baseline(spec)
         self._open: dict[str, _Open] = {}
         self._seq: dict[str, int] = defaultdict(int)  # ngày → số sự cố đã mở
@@ -126,16 +136,17 @@ class Analyzer:
             inc = self._active(key, scan_at)
             return inc is not None and (d.group in inc.groups or d.level is AlertLevel.HIGH)
 
-        # 1. WIDE: cùng một mã vượt nền ở nhiều trạm.
+        # 1. WIDE: cùng một mã (hoặc các mã của cùng một dịch vụ critical) vượt nền ở nhiều trạm.
         by_group: dict[str, list[Detection]] = defaultdict(list)
         for d in rest:
-            by_group[d.group].append(d)
+            by_group[self._wide_groups.get(d.group, d.group)].append(d)
         for group, items in sorted(by_group.items()):
             key = f"WIDE|{group}"
+            members = sorted({d.group for d in items})
             wide = (
                 len({d.station_id for d in items}) >= s.wide_min_stations
                 and len(items) >= s.wide_min_txns
-                and self.baseline.is_above(group, len(items), n_new)
+                and self.baseline.is_above_any(members, len(items), n_new)
             )
             if wide or self._active(key, scan_at):
                 take(key, "WIDE", items)
