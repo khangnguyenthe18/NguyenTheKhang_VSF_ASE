@@ -25,7 +25,7 @@ flowchart LR
     SIM["Simulator<br/>Danh sách giao dịch VN<br/>lưu lượng thực tế"]
     SCAN["Scanner<br/>mốc :00 / :30"]
     ANA["Analyzer<br/>bảng mã chuẩn + mức nền<br/>+ cửa sổ 24 giờ"]
-    NOTI["Thông báo<br/>1 mail + 1 card / lần quét"]
+    NOTI["Thông báo<br/>1 mail + 1 card / lần quét<br/>(giả lập: Mailpit, mock Teams)"]
     KPI["KPI + health score<br/>+ open point"]
     REP["Báo cáo tuần / tháng<br/>(mail)"]
     DASH["Dashboard<br/>Danh sách giao dịch"]
