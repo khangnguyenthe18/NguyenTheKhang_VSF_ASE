@@ -11,5 +11,12 @@ __pycache__/
 # Dữ liệu tủ đổi pin VinFast (nguồn ngoài, đã được phép dùng; không commit file lớn)
 ase/dashboard/static/vinfast_bss.json.gz
 
-# Tài liệu kế hoạch / báo cáo: chỉ giữ trên máy, không đưa lên GitHub
-docs/
+# Tài liệu: chỉ đưa lên GitHub các bản nộp Gate (danh sách dưới); bản nháp/kế hoạch cũ giữ trên máy
+docs/*
+!docs/README.md
+!docs/Gate0.md
+!docs/GATE0_v1.md
+!docs/KE_HOACH.md
+!docs/RUBRIC.md
+!docs/GATE1_REPORT.md
+!docs/OPS_AGENT_PLAN.md
