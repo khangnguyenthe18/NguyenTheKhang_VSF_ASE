@@ -50,7 +50,7 @@ mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test
 - Thời gian ISO-8601 UTC. Mã lỗi là mã của bảng mã lỗi chuẩn, giữ nguyên văn.
 - Thêm field = không phá vỡ (consumer bỏ qua field lạ). Đổi/xoá field = tăng major, cả hai đồng ý.
 - Nhân đặt `notify=true` khi cần báo người; Khang gửi trong lần quét 30 phút kế tiếp (không gửi riêng).
-- Trường tuỳ chọn (v0.2): `category` = loại hành vi trên log (chỉ cho `behavior`; không phải nhóm lỗi của bảng mã chuẩn); `dashboard_url` = link log stream lọc sẵn phạm vi + thời gian; `level` của `behavior`: mức cao → `High`, các mức còn lại → `Low`.
+- Trường tuỳ chọn (v0.2): `category` = loại hành vi trên log (chỉ cho `behavior`; không phải nhóm lỗi của bảng mã chuẩn). Giá trị cho 4 kịch bản chung: `latency_degradation` (deploy làm latency tăng dần), `traffic_drop`, `repeated_request` (trùng tên kịch bản trong `scenario_instances.csv`), `vinsoc_scan`; các loại riêng của Nhân do Nhân liệt kê; `dashboard_url` = link log stream lọc sẵn phạm vi + thời gian; `level` của `behavior`: mức cao → `High`, các mức còn lại → `Low`.
 
 ## 4. Phiên bản dữ liệu chung
 
