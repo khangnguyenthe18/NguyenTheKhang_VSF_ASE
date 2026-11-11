@@ -35,7 +35,7 @@ Mỗi bên chạy được độc lập khi bên kia ngừng.
 
 **Một schema chung** `ase.anomaly.event` v0.1 cho cả hai chiều:
 [`contracts/schemas/ase.anomaly.event.v0.1.json`](schemas/ase.anomaly.event.v0.1.json),
-mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test_anomaly_event_contract.py`.
+mẫu ở [`contracts/fixtures/`](fixtures/), contract test `tests/contract/test_anomaly_event_contract.py`. Định dạng danh sách giao dịch dùng chung cho I1: [`DATA_FORMAT_v0.1.md`](DATA_FORMAT_v0.1.md).
 
 | `kind` | Chiều | Nội dung | `event_id` |
 |---|---|---|---|
