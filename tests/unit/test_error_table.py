@@ -54,9 +54,9 @@ def test_error_table_lookup() -> None:
     # Tên giữ nguyên chính tả gốc
     assert t.lookup("B6070").name == "ASIC Short Circut"  # type: ignore[union-attr]
     # Mã ngoài bảng chuẩn và giao dịch không có mã
-    for code in ("C6003", "400364", "B6086", "", None):
+    for code in ("X0000", "X0001", "", None):
         assert t.lookup(code) is None
-    assert not t.has("C6003") and t.has("D6038")
+    assert not t.has("X0000") and t.has("D6038")
 
 
 def test_error_table_rejects_malformed_file(tmp_path: Path) -> None:

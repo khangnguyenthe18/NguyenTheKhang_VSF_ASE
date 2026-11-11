@@ -150,7 +150,7 @@ def test_scanner_reports_each_transaction_once_and_flags_stuck_by_threshold() ->
     scan_at = T0 + timedelta(minutes=30)
     txns = [
         _txn(1, status=TxnStatus.FAILED, error_code="C6029", updated_at=T0 + timedelta(minutes=1)),
-        _txn(2, status=TxnStatus.FAILED, error_code="C6003"),  # mã ngoài bảng chuẩn
+        _txn(2, status=TxnStatus.FAILED, error_code="X0000"),  # mã giả, ngoài bảng chuẩn
         _txn(3, status=TxnStatus.CREATED, updated_at=scan_at - timedelta(minutes=10)),  # kẹt
         _txn(
             4,
@@ -316,7 +316,7 @@ def test_scan_email_and_card_content(smoke_dir: Path) -> None:
 
 
 def test_scan_email_marks_codes_outside_standard_table() -> None:
-    dets = [_det(1, "C6003"), _det(2, None, kind="STUCK")]
+    dets = [_det(1, "X0000"), _det(2, None, kind="STUCK")]
     digest = ScanDigest(
         scan_id="scan:20261109T1000Z",
         window_start=T0,
@@ -326,7 +326,7 @@ def test_scan_email_marks_codes_outside_standard_table() -> None:
         incidents=[],
     )
     mail = render_scan_email(digest)
-    assert "C6003 – mã ngoài bảng chuẩn" in mail.text_body
+    assert "X0000 – mã ngoài bảng chuẩn" in mail.text_body
     assert "Mã ngoài bảng chuẩn (cần người kiểm tra): 1" in mail.text_body
     assert "Giao dịch kẹt (không có mã lỗi)" in mail.text_body
 

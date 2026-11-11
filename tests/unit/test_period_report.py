@@ -54,7 +54,9 @@ def _frame(txns: list[SwapTransaction]) -> pl.DataFrame:
 
 def test_top_n_percentages_and_kpis() -> None:
     txns = [_txn(i) for i in range(100)]
-    codes = ["D6031"] * 5 + ["C6029"] * 3 + ["D6036"] * 2 + ["C6003"]  # C6003: ngoài bảng chuẩn
+    codes = (
+        ["D6031"] * 5 + ["C6029"] * 3 + ["D6036"] * 2 + ["X0000"]
+    )  # X0000: mã giả, ngoài bảng chuẩn
     txns += [_txn(200 + k, TxnStatus.FAILED, c) for k, c in enumerate(codes)]
     r = build_period_report(
         _frame(txns),
@@ -73,7 +75,7 @@ def test_top_n_percentages_and_kpis() -> None:
     assert [(c.code, c.n) for c in s.top] == [("D6031", 5), ("C6029", 3), ("D6036", 2)]
     assert s.top[0].pct == pytest.approx(45.45) and s.top_pct == pytest.approx(90.91, abs=0.01)
     assert s.top[1].name == "LockTimeoutError" and s.top[1].level is AlertLevel.HIGH
-    outside = next(c for c in s.all_codes if c.code == "C6003")
+    outside = next(c for c in s.all_codes if c.code == "X0000")
     assert outside.name == "mã ngoài bảng chuẩn" and outside.level is None
     assert sum(c.n for c in s.all_codes) == s.n_failures
     assert s.success_rate == pytest.approx(100 / 111)
