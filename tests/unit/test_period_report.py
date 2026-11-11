@@ -102,7 +102,7 @@ def test_health_score_formula_and_labels() -> None:
 
 def test_open_points_come_from_kpis() -> None:
     good = [_txn(i, cabinet=f"B.TST0000{1 + i % 4}.009") for i in range(400)]
-    bad = [_txn(1000 + i, cabinet="B.TST00005.001") for i in range(40)]
+    bad = [_txn(1000 + i, cabinet="B.TST00005.001") for i in range(60)]  # ≥ health_min_txns
     bad += [_txn(2000 + i, TxnStatus.FAILED, "C6029", cabinet="B.TST00005.001") for i in range(8)]
     r = build_period_report(
         _frame(good + bad), kind="custom", start=date(2026, 10, 19), end=date(2026, 10, 25),
@@ -133,7 +133,8 @@ def test_due_reports_schedule() -> None:
 def test_transaction_profiles_are_vietnam_only() -> None:
     profiles = load_profiles()
     for name, p in profiles.profiles.items():
-        assert set(p.for_transactions().stations) == {"VN"}, name
+        assert set(p.for_transactions(10).stations) == {"VN"}, name
+        assert p.for_transactions(10).real_sites, name
 
 
 def test_sf10_report_counts_match_ground_truth(tmp_path: Path) -> None:

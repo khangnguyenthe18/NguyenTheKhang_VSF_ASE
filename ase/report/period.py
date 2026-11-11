@@ -281,8 +281,18 @@ def _open_points(
         )
 
     out: dict[str, OpenPointItem] = {}
+    # Trạm chỉ có một tủ: open point của trạm trùng hẳn của tủ → chỉ giữ của tủ.
+    single = {c.entity.rsplit(".", 1)[0]: c.n_total for c in cabinets}
+    multi = Counter(c.entity.rsplit(".", 1)[0] for c in cabinets)
+    stations = [
+        st for st in stations if not (multi[st.entity] == 1 and single.get(st.entity) == st.n_total)
+    ]
     for h, col in [*((c, "cabinet_id") for c in cabinets), *((s, "station_id") for s in stations)]:
-        if h.score >= op.health_below:
+        if (
+            h.score >= op.health_below
+            or h.n_total < op.health_min_txns
+            or h.n_fail < op.health_min_failures
+        ):
             continue
         expr = pl.col(col) == h.entity
         code = top_code(expr)

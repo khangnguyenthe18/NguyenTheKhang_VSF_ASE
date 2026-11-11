@@ -64,6 +64,14 @@ common:
     - {code: PAY_GATEWAY_TIMEOUT, weight: 4}
     - {code: BAT_LOW_SOC, weight: 4, omit_code_allowed: true}
 
+# Danh sách giao dịch: lưu lượng toàn quốc thực tế, phân bổ theo tỉnh/thành (TxnTraffic).
+txn_traffic:
+  monthly_total: 2900000      # ≈ 2,8–3 triệu GD/tháng cho toàn bộ điểm đổi pin VN (chủ dự án)
+  days_per_month: 30
+  province_alpha: 0.5         # GIẢ ĐỊNH: tỉnh nhiều điểm → mỗi điểm đông hơn (cần OPS xác nhận)
+  cabinets_per_site: [1, 2]
+  users_per_site: 10
+
 profiles:
   smoke:
     seed: 42
@@ -72,7 +80,7 @@ profiles:
     sessions_per_day: 300
     stations: {VN: 2}
     split: {baseline_days: 0, after: smoke}
-    txn_stations: {VN: 2}          # danh sách giao dịch: chỉ VN (góp ý Gate 0)
+    txn_sites: 150                # danh sách giao dịch: 150 điểm thật VN (~330 GD/ngày)
   dev:
     seed: 1042
     start_date: 2026-10-19
@@ -80,7 +88,7 @@ profiles:
     sessions_per_day: 1000
     stations: {VN: 2, PH: 1, ID: 2}    # ID: WIB + WITA (xoay vòng timezone)
     split: {baseline_days: 7, after: dev}
-    txn_stations: {VN: 5}          # danh sách giao dịch: chỉ VN (góp ý Gate 0)
+    txn_sites: 450                # ~1.000 GD/ngày, đúng mật độ thực tế mỗi điểm
   demo:
     # Chỉ để trình diễn dashboard/luồng cảnh báo (nhiều trạm, 3 ngày). KHÔNG dùng để đo SF:
     # số đo luôn lấy từ dev/eval. Không có tập test, không ảnh hưởng tập test đã đóng băng.
@@ -91,7 +99,8 @@ profiles:
     # Số trạm tỷ lệ với traffic_weight (VN 70 / PH 17 / ID 13) để mọi trạm có tải ~150 phiên/ngày.
     stations: {VN: 200, PH: 48, ID: 38}  # ID: 19 WIB + 19 WITA
     split: {baseline_days: 0, after: demo}
-    txn_stations: {VN: 286}          # danh sách giao dịch: chỉ VN (góp ý Gate 0)
+    txn_sites: 3000               # ~6.700 GD/ngày, chỉ trình diễn
+    txn_heartbeat_minutes: 15
     real_sites: true        # trạm VN đặt tại tủ VinFast thật, chọn theo tỷ lệ số tủ từng tỉnh
     telemetry_jsonl: false  # chỉ ghi cabinet_telemetry.parquet (bản JSONL ~0,5 GB, không ai đọc)
   eval:
@@ -102,5 +111,15 @@ profiles:
     sessions_per_day: 1500
     stations: {VN: 7, PH: 2, ID: 2}
     split: {baseline_days: 20, after: test}
-    txn_stations: {VN: 11}          # danh sách giao dịch: chỉ VN (góp ý Gate 0)
-
+    txn_sites: 650                # ~1.450 GD/ngày, đúng mật độ thực tế mỗi điểm
+  scale:
+    # Toàn bộ điểm đổi pin VN thật, 1 ngày (~95 nghìn GD): chỉ đo hiệu năng quét / báo cáo ở quy
+    # mô thật. Không sinh dữ liệu pipeline cũ, không telemetry, không đo SF.
+    seed: 4042
+    start_date: 2026-10-26
+    days: 1
+    sessions_per_day: 1
+    stations: {VN: 1}
+    split: {baseline_days: 0, after: scale}
+    txn_only: true
+    txn_telemetry: false

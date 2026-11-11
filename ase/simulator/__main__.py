@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ase.common.config import get_settings
 from ase.simulator.generator import Manifest, generate
+from ase.simulator.profiles import load_profiles
 from ase.simulator.txn_generator import TxnManifest, generate_transactions
 
 
@@ -40,7 +41,8 @@ def main() -> None:
     )
     args = parser.parse_args()
     out = args.out or get_settings().profile_dir(args.profile)
-    if not args.only_transactions:
+    txn_only = load_profiles().profiles[args.profile].txn_only
+    if not args.only_transactions and not txn_only:
         _print_summary(asyncio.run(generate(args.profile, out)))
     _print_txn_summary(asyncio.run(generate_transactions(args.profile, out)))
 

@@ -52,8 +52,10 @@ scan:
   station_min_cabinets: 2       # lỗi đáng chú ý ở ≥ N tủ của một trạm ...
   station_min_txns: 3           # ... và ≥ N giao dịch → sự cố mức trạm
   cabinet_min_txns: 2           # ≥ N giao dịch cùng mã tại một tủ và vượt nền → sự cố mức tủ
+  # Mật độ thực tế 2–3 GD/tủ/ngày: lỗi mức tủ/trạm cộng dồn qua các lần quét trong cửa sổ này.
+  local_window_minutes: 1440
   # Lỗi mới nối vào sự cố đang mở nếu lần gần nhất của sự cố còn trong khoảng này (phút).
-  continue_minutes: {WIDE: 60, STATION: 120, CABINET: 1440}
+  continue_minutes: {WIDE: 60, STATION: 1440, CABINET: 4320}   # tủ hỏng mở tới khi sửa (≤ 3 ngày)
 
 stream:
   allowed_lateness_seconds: 10

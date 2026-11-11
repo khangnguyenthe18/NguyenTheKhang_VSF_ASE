@@ -23,7 +23,9 @@ services:
 
 # Open point sinh từ KPI (CLAUDE.md §11). Priority = công thức, không để LLM chấm.
 open_points:
-  health_below: 70            # đối tượng có health score < N
+  health_below: 70            # đối tượng có health score < N ...
+  health_min_txns: 50         # ... và có ≥ N giao dịch trong kỳ (tủ 2–3 GD/ngày: % lỗi trên mẫu nhỏ
+  health_min_failures: 5      #     dao động mạnh) và ≥ N giao dịch lỗi/kẹt
   code_increase_pct: 50       # mã lỗi tăng ≥ N% so với kỳ trước ...
   code_increase_min_cases: 10 # ... và có ≥ N case trong kỳ này
   repeat_cabinet_code_min: 5  # cùng một mã lặp ≥ N lần tại một tủ trong kỳ ...

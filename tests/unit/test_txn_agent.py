@@ -463,3 +463,55 @@ def test_analyzer_merges_codes_of_one_critical_service_into_one_wide_incident() 
     dets_b = [d.model_copy(update={"incident_id": None}) for d in dets]
     keys = {i.key for i in b.analyze(T0, _result(dets_b))}
     assert "WIDE|svc:payment_callback" not in keys
+
+
+def test_traffic_matches_national_volume_and_city_density() -> None:
+    """≈ 2,9 triệu GD/tháng cho toàn bộ điểm VN; thành phố lớn đông hơn mỗi điểm."""
+    from ase.simulator.entities import build_world
+    from ase.simulator.profiles import load_profiles
+    from ase.simulator.real_sites import load_real_sites
+    from ase.simulator.txn_generator import station_rates
+
+    sites = load_real_sites()
+    if not sites:
+        pytest.skip("chưa có vinfast_bss.json.gz (dữ liệu ngoài, không commit)")
+    profiles = load_profiles()
+    traffic = profiles.txn_traffic
+    common = profiles.common.model_copy(update={"users_per_station": 1, "slots_per_cabinet": 2})
+    world = build_world(profiles.profiles["dev"].for_transactions(450), common, default_knowledge())
+    rates = station_rates(world, traffic, sites)
+    # Tổng kỳ vọng toàn quốc (mọi điểm thật) = monthly_total / days_per_month
+    from collections import Counter
+
+    per_province = Counter(s.province for s in sites)
+    mean = len(sites) / len(per_province)
+    national = sum(
+        n * (per_province[p] / mean) ** traffic.province_alpha for p, n in per_province.items()
+    )
+    code = {st.station_id: st.site_code or "" for st in world.stations}
+    any_st = next(iter(rates))
+    prov = code[any_st].split(".")[1].rstrip("0123456789")
+    base = rates[any_st] / (per_province[prov] / mean) ** traffic.province_alpha
+    assert base * national == pytest.approx(traffic.monthly_total / traffic.days_per_month)
+    by_prov: dict[str, float] = {}
+    for st_id, r in rates.items():
+        by_prov[code[st_id].split(".")[1].rstrip("0123456789")] = r
+    assert by_prov["HCM"] > 1.5 * min(by_prov.values())  # thành phố lớn đông hơn mỗi điểm
+    median = sorted(rates.values())[len(rates) // 2]
+    assert 1.5 < median < 3.5  # bình quân 2–3 GD/điểm/ngày
+
+
+def test_analyzer_accumulates_sparse_cabinet_failures_across_scans() -> None:
+    """Mật độ thực tế: lỗi Low của một tủ rải rác qua nhiều lần quét vẫn thành sự cố."""
+    a = Analyzer(SPEC)
+    first = [_det(1, "D6038")]
+    assert a.analyze(T0, _result(first, per_cabinet=1)) == []  # 1 lỗi: chưa đủ
+    t1 = T0 + timedelta(hours=5)
+    second = [_det(2, "D6038", at=t1)]
+    (inc,) = a.analyze(t1, _result(second, per_cabinet=1))  # cộng dồn trong 24 giờ: 2 lỗi
+    assert inc.kind == "CABINET" and inc.txn_ids == [second[0].emsp_txn_id]
+    # Quá cửa sổ 24 giờ thì không cộng dồn với lỗi cũ
+    b = Analyzer(SPEC)
+    b.analyze(T0, _result([_det(10, "D6038")], per_cabinet=1))
+    late = T0 + timedelta(minutes=SPEC.local_window_minutes + 30)
+    assert b.analyze(late, _result([_det(11, "D6038", at=late)], per_cabinet=1)) == []

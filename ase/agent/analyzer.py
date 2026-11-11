@@ -71,6 +71,43 @@ class Baseline:
             self._fails.subtract(old)
 
 
+class Rolling:
+    """Giao dịch lỗi CHƯA vào sự cố và số giao dịch mới, theo tủ/trạm, trong `window` gần nhất.
+
+    Vì sao: mật độ thực tế chỉ 2–3 giao dịch/tủ/ngày nên lỗi của một tủ hỏng rải rác qua nhiều
+    lần quét; chỉ xét trong một lần quét 30 phút thì không bao giờ đủ 2 lỗi để thành sự cố.
+    """
+
+    def __init__(self, window: timedelta) -> None:
+        self._window = window
+        self._lone: dict[str, deque[tuple[datetime, str]]] = defaultdict(deque)  # key → (t, group)
+        self._exposure: dict[str, deque[tuple[datetime, int]]] = defaultdict(deque)
+
+    def _trim(self, q: deque[tuple[datetime, object]], now: datetime) -> None:
+        while q and q[0][0] < now - self._window:
+            q.popleft()
+
+    def counts(self, key: str, now: datetime) -> Counter[str]:
+        q = self._lone[key]
+        self._trim(q, now)  # type: ignore[arg-type]
+        return Counter(g for _, g in q)
+
+    def exposure(self, key: str, now: datetime) -> int:
+        q = self._exposure[key]
+        self._trim(q, now)  # type: ignore[arg-type]
+        return sum(n for _, n in q)
+
+    def add_exposure(self, key: str, now: datetime, n: int) -> None:
+        if n:
+            self._exposure[key].append((now, n))
+
+    def add_lone(self, key: str, now: datetime, group: str) -> None:
+        self._lone[key].append((now, group))
+
+    def clear(self, key: str, group: str) -> None:
+        self._lone[key] = deque((t, g) for t, g in self._lone[key] if g != group)
+
+
 @dataclass
 class _Open:
     incident_id: str
@@ -102,6 +139,7 @@ class Analyzer:
         self._spec = spec
         self._wide_groups = wide_groups or {}
         self.baseline = Baseline(spec)
+        self.rolling = Rolling(timedelta(minutes=spec.local_window_minutes))
         self._open: dict[str, _Open] = {}
         self._seq: dict[str, int] = defaultdict(int)  # ngày → số sự cố đã mở
 
@@ -117,9 +155,6 @@ class Analyzer:
         s = self._spec
         detections = result.detections
         n_new = sum(result.new_by_cabinet.values())
-        new_by_station: Counter[str] = Counter()
-        for (station, _cab), n in result.new_by_cabinet.items():
-            new_by_station[station] += n
 
         assigned: dict[str, list[Detection]] = defaultdict(list)
         kinds: dict[str, IncidentKind] = {}
@@ -152,8 +187,15 @@ class Analyzer:
                 take(key, "WIDE", items)
 
         # Lỗi đáng chú ý ở mức trạm / tủ: mã High, hoặc mã vượt nền tại đúng trạm / tủ đó.
-        def notable(items: list[Detection], exposure: int, min_txns: int) -> list[Detection]:
-            counts = Counter(d.group for d in items)
+        # Đếm cả lỗi chưa vào sự cố của các lần quét trước trong cửa sổ trượt (`Rolling`).
+        for (station, cab), n in result.new_by_cabinet.items():
+            self.rolling.add_exposure(f"STATION|{station}", scan_at, n)
+            if cab:
+                self.rolling.add_exposure(f"CABINET|{cab}", scan_at, n)
+
+        def notable(key: str, items: list[Detection], min_txns: int) -> list[Detection]:
+            counts = Counter(d.group for d in items) + self.rolling.counts(key, scan_at)
+            exposure = self.rolling.exposure(key, scan_at)
             above = {
                 g
                 for g, n in counts.items()
@@ -167,7 +209,7 @@ class Analyzer:
             by_station[d.station_id].append(d)
         for station, items in sorted(by_station.items()):
             key = f"STATION|{station}"
-            hot = notable(items, new_by_station[station], s.station_min_txns)
+            hot = notable(key, items, s.station_min_txns)
             spread = (
                 len({d.cabinet_id for d in hot}) >= s.station_min_cabinets
                 and len(hot) >= s.station_min_txns
@@ -175,19 +217,28 @@ class Analyzer:
             picked = hot if spread else [d for d in items if joins(key, d)]
             if picked:
                 take(key, "STATION", picked)
+                for g in {d.group for d in picked}:
+                    self.rolling.clear(key, g)
 
         # 3. CABINET: lỗi đáng chú ý tại một tủ.
-        by_cabinet: dict[tuple[str, str], list[Detection]] = defaultdict(list)
+        by_cabinet: dict[str, list[Detection]] = defaultdict(list)
         for d in rest:
             if d.cabinet_id:
-                by_cabinet[(d.station_id, d.cabinet_id)].append(d)
-        for (station, cabinet), items in sorted(by_cabinet.items()):
+                by_cabinet[d.cabinet_id].append(d)
+        for cabinet, items in sorted(by_cabinet.items()):
             key = f"CABINET|{cabinet}"
-            exposure = result.new_by_cabinet.get((station, cabinet), 0)
-            hot_ids = {d.emsp_txn_id for d in notable(items, exposure, s.cabinet_min_txns)}
+            hot_ids = {d.emsp_txn_id for d in notable(key, items, s.cabinet_min_txns)}
             picked = [d for d in items if d.emsp_txn_id in hot_ids or joins(key, d)]
             if picked:
                 take(key, "CABINET", picked)
+                for g in {d.group for d in picked}:
+                    self.rolling.clear(key, g)
+
+        # Lỗi lẻ còn lại: nhớ trong cửa sổ trượt để lần quét sau cộng dồn.
+        for d in rest:
+            if d.cabinet_id:
+                self.rolling.add_lone(f"CABINET|{d.cabinet_id}", scan_at, d.group)
+            self.rolling.add_lone(f"STATION|{d.station_id}", scan_at, d.group)
 
         self.baseline.update(scan_at, n_new, Counter(d.group for d in detections))
         return [self._record(scan_at, key, kinds[key], assigned[key]) for key in sorted(assigned)]

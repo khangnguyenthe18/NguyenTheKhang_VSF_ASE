@@ -77,6 +77,12 @@ def estimate_soc(
     return min(100.0, float(soc) + charge_rate_pct_per_hour * hours)
 
 
+def online_window(data: ProfileData, settings: Settings) -> int:
+    """Tủ online nếu có heartbeat trong cửa sổ này: ít nhất 2,5 chu kỳ heartbeat của dữ liệu
+    (danh sách giao dịch gửi heartbeat 10–15 phút/lần, pipeline cũ 1 phút/lần)."""
+    return max(settings.cabinet_online_window_seconds, int(2.5 * data.heartbeat_seconds))
+
+
 def clamp_as_of(
     as_of: datetime | None,
     min_time: datetime,
@@ -275,7 +281,7 @@ def _station_rows_and_map(
         data.cabinets,
         data.cabinet_telemetry,
         as_of,
-        online_window_seconds=settings.cabinet_online_window_seconds,
+        online_window_seconds=online_window(data, settings),
     )
     ready_by_cab = compute_ready_batteries_by_cabinet(
         data.slots,
@@ -642,7 +648,7 @@ def build_station_detail(
         data.cabinets,
         data.cabinet_telemetry,
         eff_as_of,
-        online_window_seconds=cfg.cabinet_online_window_seconds,
+        online_window_seconds=online_window(data, cfg),
     )
 
     cabs_df = data.cabinets.filter(pl.col("station_id") == station_id).sort("cabinet_id")
@@ -792,7 +798,7 @@ def build_station_detail(
         seq = [win_24h_start, *hb_times, eff_as_of]
         for a, b in itertools.pairwise(seq):
             gap_s = (b - a).total_seconds()
-            if gap_s >= float(cfg.cabinet_online_window_seconds):
+            if gap_s >= float(online_window(data, cfg)):
                 gaps.append(
                     HeartbeatGap(
                         start_utc=a,

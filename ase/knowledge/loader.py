@@ -404,6 +404,7 @@ class ScanSpec(_Strict):
     station_min_cabinets: int = Field(ge=2)
     station_min_txns: int = Field(ge=1)
     cabinet_min_txns: int = Field(ge=1)
+    local_window_minutes: int = Field(gt=0)
     continue_minutes: dict[Literal["WIDE", "STATION", "CABINET"], int]
 
     @model_validator(mode="after")
@@ -510,6 +511,8 @@ class ServiceSpec(_Strict):
 
 class OpenPointSpec(_Strict):
     health_below: float
+    health_min_txns: int = Field(ge=1)
+    health_min_failures: int = Field(ge=1)
     code_increase_pct: float = Field(gt=0)
     code_increase_min_cases: int = Field(ge=1)
     repeat_cabinet_code_min: int = Field(ge=2)

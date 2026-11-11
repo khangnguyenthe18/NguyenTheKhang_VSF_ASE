@@ -202,12 +202,13 @@ def test_api_and_html_endpoints_return_200_and_validate(
 
     ov = OverviewResponse.model_validate(client.get("/api/dashboard/overview?profile=smoke").json())
     assert ov.meta.profile == "smoke"
-    assert len(ov.stations_map) == 2
+    smoke_sites = PROFILES.profiles["smoke"].txn_sites
+    assert len(ov.stations_map) == smoke_sites  # điểm thật lấy mẫu của danh sách giao dịch
 
     st_list = StationsListResponse.model_validate(
         client.get("/api/dashboard/stations?profile=smoke").json()
     )
-    assert len(st_list.stations) == 2
+    assert len(st_list.stations) == smoke_sites
     first_station_id = st_list.stations[0].station_id
     st_det = StationDetailResponse.model_validate(
         client.get(f"/api/dashboard/stations/{first_station_id}?profile=smoke").json()

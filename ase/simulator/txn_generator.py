@@ -13,13 +13,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import random
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import orjson
 import polars as pl
 import yaml
@@ -30,9 +33,17 @@ from ase.knowledge.loader import ErrorTable, Knowledge, default_error_table, def
 from ase.simulator.checks import SimulationCheckError
 from ase.simulator.entities import USER_NORMAL, CabinetInfo, World, build_world
 from ase.simulator.generator import _frame, _write_table
-from ase.simulator.profiles import PROFILES_PATH, ProfilesFile, ProfileSpec, load_profiles
+from ase.simulator.profiles import (
+    PROFILES_PATH,
+    CommonSpec,
+    ProfilesFile,
+    ProfileSpec,
+    TxnTraffic,
+    load_profiles,
+)
+from ase.simulator.real_sites import RealSite, load_real_sites
 from ase.simulator.rng import substream
-from ase.simulator.traffic import generate_arrivals, local_day_start_utc
+from ase.simulator.traffic import Arrival, hourly_weights, local_day_start_utc
 
 TXN_SCENARIOS_PATH = Path(__file__).resolve().parent / "txn_scenarios.yaml"
 TRANSACTIONS_TABLE = "swap_transactions"
@@ -208,12 +219,76 @@ def _after(rng: random.Random, t: datetime, bounds: tuple[int, int]) -> datetime
     return t + timedelta(seconds=rng.randint(*bounds), milliseconds=rng.randrange(1000))
 
 
+NATIONAL_SITES_FALLBACK = 43_297  # số điểm đổi pin VN trong file tủ thật (khi không có file)
+_PROVINCE_RE = re.compile(r"^[A-Z]+\.([A-Z]+)\d+$")
+
+
+def station_rates(
+    world: World, traffic: TxnTraffic, sites: list[RealSite] | None
+) -> dict[str, float]:
+    """Số giao dịch kỳ vọng mỗi ngày của từng trạm, theo tỉnh/thành (xem `TxnTraffic`).
+
+    Tổng của TOÀN QUỐC (mọi điểm thật, kể cả điểm không được lấy mẫu) = monthly_total / ngày, nên
+    mỗi trạm mẫu có đúng mật độ thực tế; tỉnh nhiều điểm → mỗi điểm đông hơn.
+    """
+    daily = traffic.monthly_total / traffic.days_per_month
+    if not sites:
+        return {st.station_id: daily / NATIONAL_SITES_FALLBACK for st in world.stations}
+    per_province = Counter(s.province for s in sites)
+    mean = len(sites) / len(per_province)
+
+    def factor(province: str) -> float:
+        return float((per_province.get(province, mean) / mean) ** traffic.province_alpha)
+
+    base = daily / sum(n * factor(p) for p, n in per_province.items())
+    out: dict[str, float] = {}
+    for st in world.stations:
+        m = _PROVINCE_RE.match(st.site_code or "")
+        out[st.station_id] = base * factor(m.group(1) if m else "")
+    return out
+
+
+def _poisson(rng: random.Random, lam: float) -> int:
+    """Poisson nhỏ (λ ≲ 30) theo Knuth; dùng RNG tất định của simulator."""
+    limit, k, p = math.exp(-lam), 0, 1.0
+    while True:
+        p *= rng.random()
+        if p <= limit:
+            return k
+        k += 1
+
+
+def generate_txn_arrivals(
+    profile: ProfileSpec, common: CommonSpec, world: World, rates: dict[str, float]
+) -> list[Arrival]:
+    """Giờ bắt đầu giao dịch: số GD/ngày ~ Poisson(tốc độ trạm), phân bố theo giờ địa phương."""
+    hours = list(range(24))
+    weights = hourly_weights(common)
+    out: list[Arrival] = []
+    for st in world.stations:
+        for day in range(profile.days):
+            rng = substream(profile.seed_for_day(day), "txn_traffic", st.station_id, day)
+            midnight = local_day_start_utc(profile, st.timezone, day)
+            for _ in range(_poisson(rng, rates[st.station_id] * rng.uniform(0.85, 1.15))):
+                hour = rng.choices(hours, weights)[0]
+                out.append(
+                    Arrival(
+                        st.station_id,
+                        day,
+                        midnight + timedelta(hours=hour, seconds=rng.randrange(3600)),
+                    )
+                )
+    out.sort(key=lambda a: (a.started_at, a.station_id))
+    return out
+
+
 def _plan_instances(
     profile_name: str,
     profile: ProfileSpec,
     world: World,
     scenarios: TxnScenariosFile,
     knowledge: Knowledge,
+    rates: dict[str, float],
 ) -> list[ScenarioInstance]:
     base, days = profile.split.baseline_days, profile.days
     windows = [(0, base), (base, days)] if 0 < base < days else [(0, days)]
@@ -230,7 +305,9 @@ def _plan_instances(
             day = lo + (int((j + 0.5) * (hi - lo) / m) + k) % (hi - lo)
             rng = substream(profile.seed_for_day(day), "txn_scenario", spec.name, i)
             pool = [s for s in world.stations if spec.country in (None, s.country)]
-            station = rng.choice(pool)
+            # Trạm xảy ra sự cố chọn theo trọng số lưu lượng: sự cố ở trạm gần như không có
+            # giao dịch thì danh sách giao dịch không thể thấy (giới hạn này ghi trong báo cáo).
+            station = rng.choices(pool, weights=[rates[s.station_id] for s in pool])[0]
             cabinet = rng.choice(world.cabinets_of_station[station.station_id])
             if spec.scope in ("cabinet", "station"):
                 tz = station.timezone
@@ -273,11 +350,23 @@ def simulate_transactions(
     if unknown:
         raise SimulationCheckError(f"mã không có trong bảng mã lỗi chuẩn: {sorted(unknown)}")
 
-    profile, common = profiles.profiles[profile_name].for_transactions(), profiles.common
+    base_profile = profiles.profiles[profile_name]
+    traffic = profiles.txn_traffic
+    sites = load_real_sites()
+    n_sites = base_profile.txn_sites or (len(sites) if sites else NATIONAL_SITES_FALLBACK)
+    profile = base_profile.for_transactions(n_sites)
+    common = profiles.common.model_copy(
+        update={
+            "cabinets_per_station": traffic.cabinets_per_site,
+            "users_per_station": traffic.users_per_site,
+            "slots_per_cabinet": 2,  # pin trong world chỉ dùng để lấy S/N; connector theo loại tủ
+        }
+    )
     seed = profile.seed
     world = build_world(profile, common, knowledge)
     codes = station_codes(world, seed)
-    instances = _plan_instances(profile_name, profile, world, scenarios, knowledge)
+    rates = station_rates(world, traffic, sites)
+    instances = _plan_instances(profile_name, profile, world, scenarios, knowledge, rates)
     timing = scenarios.timing
 
     cabinet_type: dict[str, str] = {}
@@ -292,7 +381,7 @@ def simulate_transactions(
 
     txns: list[SwapTransaction] = []
     truth: list[TxnGroundTruthRow] = []
-    arrivals = generate_arrivals(profile, common, world, knowledge)
+    arrivals = generate_txn_arrivals(profile, common, world, rates)
     for seq, arr in enumerate(arrivals, start=1):
         station = world.station_by_id[arr.station_id]
         rng = substream(profile.seed_for_day(arr.day_index), "txn", seq)
@@ -424,9 +513,8 @@ def build_telemetry(
     instances: list[ScenarioInstance],
     txns: list[SwapTransaction],
 ) -> pl.DataFrame:
-    """Telemetry khớp với danh sách giao dịch: heartbeat 1 phút/tủ + khoang quanh từng giao dịch.
-
-    Vì sao dựng bằng cột thay vì model từng dòng: profile `demo` có hàng triệu heartbeat.
+    """Telemetry khớp với danh sách giao dịch: heartbeat mỗi `txn_heartbeat_minutes`/tủ + khoang
+    quanh từng giao dịch. Heartbeat dựng bằng numpy (hàng triệu dòng ở profile lớn).
     Kịch bản có `overheat_temp_c` làm nhiệt độ tủ tăng dần trong đúng khoảng thời gian sự cố.
     """
     cab_ids: list[str] = []
@@ -437,32 +525,34 @@ def build_telemetry(
     temps: list[float] = []
     times: list[datetime] = []
     base_temp: dict[str, float] = {}
-    minutes = profile.days * 24 * 60
+    step = profile.txn_heartbeat_minutes
+    n = profile.days * 24 * 60 // step
+    offsets = np.arange(n, dtype="int64") * step * 60_000_000  # micro giây
+    hb_cab: list[np.ndarray] = []
+    hb_temp: list[np.ndarray] = []
+    hb_time: list[np.ndarray] = []
     for cab in world.cabinets:
         code = cabinet_code[cab.cabinet_id]
         rng = substream(profile.seed, "txn_heartbeat", cab.cabinet_id)
         base = rng.uniform(*ambient)
         base_temp[code] = base
+        if not profile.txn_telemetry:
+            continue
         start = local_day_start_utc(profile, cab.timezone, 0)
-        hot = [i for i in instances if i.cabinet_id == cab.cabinet_id and i.spec.overheat_temp_c]
-        for m in range(minutes):
-            at_min = start + timedelta(minutes=m)
-            temp = base + rng.gauss(0, 0.8)
-            for i in hot:
-                if i.start <= at_min < i.end and i.spec.overheat_temp_c:
-                    lo, hi = i.spec.overheat_temp_c
-                    temp = (
-                        lo
-                        + (hi - lo) * ((at_min - i.start) / (i.end - i.start))
-                        + rng.gauss(0, 0.5)
-                    )
-            cab_ids.append(code)
-            slot_ids.append(None)
-            doors.append(None)
-            detected.append(None)
-            socs.append(None)
-            temps.append(round(temp, 1))
-            times.append(at_min)
+        t_us = int(start.timestamp() * 1_000_000) + offsets
+        gen = np.random.default_rng(rng.getrandbits(64))
+        temp = base + gen.normal(0.0, 0.8, n)
+        for i in instances:
+            if i.cabinet_id != cab.cabinet_id or not i.spec.overheat_temp_c:
+                continue
+            lo, hi = i.spec.overheat_temp_c
+            a, b = int(i.start.timestamp() * 1e6), int(i.end.timestamp() * 1e6)
+            mask = (t_us >= a) & (t_us < b)
+            frac = (t_us[mask] - a) / (b - a)
+            temp[mask] = lo + (hi - lo) * frac + gen.normal(0.0, 0.5, int(mask.sum()))
+        hb_cab.append(np.full(n, code, dtype=object))
+        hb_temp.append(np.round(temp, 1))
+        hb_time.append(t_us)
     for txn in txns:
         assert txn.cabinet_id is not None
         events: list[tuple[str | None, datetime | None, bool, float | None]] = [
@@ -479,7 +569,17 @@ def build_telemetry(
             socs.append(soc)
             temps.append(round(base_temp[txn.cabinet_id], 1))
             times.append(at)
-    return pl.DataFrame(
+    schema: dict[str, pl.DataType] = {
+        "cabinet_id": pl.String(),
+        "slot_id": pl.String(),
+        "door_state": pl.String(),
+        "battery_detected": pl.Boolean(),
+        "soc": pl.Float64(),
+        "temperature": pl.Float64(),
+        "heartbeat_at": pl.Datetime("us", "UTC"),
+        "hw_error_code": pl.String(),
+    }
+    slots_df = pl.DataFrame(
         {
             "cabinet_id": cab_ids,
             "slot_id": slot_ids,
@@ -490,17 +590,29 @@ def build_telemetry(
             "heartbeat_at": times,
             "hw_error_code": [None] * len(times),
         },
-        schema={
-            "cabinet_id": pl.String,
-            "slot_id": pl.String,
-            "door_state": pl.String,
-            "battery_detected": pl.Boolean,
-            "soc": pl.Float64,
-            "temperature": pl.Float64,
-            "heartbeat_at": pl.Datetime("us", "UTC"),
-            "hw_error_code": pl.String,
-        },
-    ).sort(["heartbeat_at", "cabinet_id", "slot_id"], nulls_last=False)
+        schema=schema,
+    )
+    if hb_cab:
+        hb = (
+            pl.DataFrame(
+                {
+                    "cabinet_id": np.concatenate(hb_cab).astype(str),
+                    "temperature": np.concatenate(hb_temp),
+                    "heartbeat_at": np.concatenate(hb_time),
+                }
+            )
+            .with_columns(
+                pl.col("heartbeat_at").cast(pl.Datetime("us")).dt.replace_time_zone("UTC"),
+                pl.lit(None, dtype=pl.String).alias("slot_id"),
+                pl.lit(None, dtype=pl.String).alias("door_state"),
+                pl.lit(None, dtype=pl.Boolean).alias("battery_detected"),
+                pl.lit(None, dtype=pl.Float64).alias("soc"),
+                pl.lit(None, dtype=pl.String).alias("hw_error_code"),
+            )
+            .select(list(schema))
+        )
+        slots_df = pl.concat([hb, slots_df])
+    return slots_df.sort(["heartbeat_at", "cabinet_id", "slot_id"], nulls_last=False)
 
 
 def check_transactions(profile_name: str, result: TxnResult, table: ErrorTable) -> None:

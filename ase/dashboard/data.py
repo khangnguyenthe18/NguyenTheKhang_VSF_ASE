@@ -18,6 +18,7 @@ import polars as pl
 
 from ase.agent.source import TRANSACTIONS_FILE, load_transactions
 from ase.common.config import Settings, get_settings
+from ase.simulator.profiles import load_profiles
 
 STATION_CODES_FILE = "station_codes.parquet"
 TXN_TELEMETRY_FILE = "txn_telemetry.parquet"
@@ -55,6 +56,8 @@ class ProfileData:
     min_time: datetime
     max_time: datetime
     default_as_of: datetime
+    # Chu kỳ heartbeat của tủ (giây): pipeline cũ 60 s; danh sách giao dịch theo profile (10–15').
+    heartbeat_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -193,6 +196,7 @@ def load_profile_data(
             if isinstance(in_win_max, datetime):
                 default_as_of = in_win_max.astimezone(UTC)
 
+    heartbeat_seconds = 60
     if (profile_dir / STATION_CODES_FILE).exists() and (profile_dir / TRANSACTIONS_FILE).exists():
         stations, cabinets, slots, cabinet_telemetry, swap_sessions, swap_events = (
             _with_operational_codes(
@@ -201,6 +205,8 @@ def load_profile_data(
         )
         # Phạm vi as_of theo danh sách giao dịch: bắt đầu giao dịch đầu tiên → lần đổi trạng thái
         # cuối; mặc định = lần đổi trạng thái cuối (mọi giao dịch đã có trạng thái cuối).
+        spec = load_profiles().profiles.get(profile)
+        heartbeat_seconds = 60 * (spec.txn_heartbeat_minutes if spec else 10)
         lo, hi = swap_sessions["started_at"].min(), swap_sessions["ended_at"].max()
         if isinstance(lo, datetime) and isinstance(hi, datetime):
             min_time, max_time = lo.astimezone(UTC), hi.astimezone(UTC)
@@ -222,6 +228,7 @@ def load_profile_data(
         min_time=min_time,
         max_time=max_time,
         default_as_of=default_as_of,
+        heartbeat_seconds=heartbeat_seconds,
     )
     _PROFILE_CACHE[profile_dir] = loaded
     return loaded
